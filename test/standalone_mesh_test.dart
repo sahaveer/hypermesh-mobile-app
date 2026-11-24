@@ -1,0 +1,132 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/services.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:hypermesh_player/services/local_media_store.dart';
+import 'package:hypermesh_player/services/api_service.dart';
+import 'package:hypermesh_player/services/local_mesh_server.dart';
+import 'package:hypermesh_player/services/app_update_service.dart';
+import 'package:hypermesh_player/models/peer_node.dart';
+
+void main() {
+  group('Standalone Mobile Mesh Unit Tests', () {
+    test('LocalMediaStore title cleaning and resolution guessing', () {
+      expect(LocalMediaStore.cleanTitle('Inception.2010.1080p.BluRay.x264.mp4'), 'Inception 2010 1080p BluRay x264');
+      expect(LocalMediaStore.cleanTitle('Dune.Part.Two.2024.4K.mkv'), 'Dune Part Two 2024 4K');
+      expect(LocalMediaStore.cleanTitle('Starboy_The_Weeknd.mp3'), 'Starboy The Weeknd');
+    });
+
+    test('PeerNode model parsing from beacon data', () {
+      final jsonMap = {
+        'id': 'phone_alex_123',
+        'name': 'Alex (Cabin 14)',
+        'host': '192.168.43.50',
+        'port': 8080,
+        'music_count': 15,
+        'video_count': 3,
+        'is_online': true,
+      };
+
+      final peer = PeerNode.fromJson(jsonMap);
+      expect(peer.id, 'phone_alex_123');
+      expect(peer.name, 'Alex (Cabin 14)');
+      expect(peer.host, '192.168.43.50');
+      expect(peer.port, 8080);
+      expect(peer.musicCount, 15);
+      expect(peer.videoCount, 3);
+      expect(peer.baseUrl, 'http://192.168.43.50:8080');
+    });
+
+    test('LocalMeshServer HTTP endpoints responding properly', () async {
+      final store = LocalMediaStore();
+      final server = LocalMeshServer(
+        mediaStore: store,
+        deviceId: 'test_node_01',
+        deviceName: 'Test Phone',
+      );
+
+      final started = await server.start();
+      expect(started, true);
+      expect(server.isRunning, true);
+
+      final client = http.Client();
+
+      // Test /api/info
+      final infoRes = await client.get(Uri.parse('${server.serverUrl}/api/info'));
+      expect(infoRes.statusCode, 200);
+      final infoJson = json.decode(infoRes.body);
+      expect(infoJson['device_name'], 'Test Phone');
+      expect(infoJson['is_online'], true);
+
+      // Test /api/songs
+      final songsRes = await client.get(Uri.parse('${server.serverUrl}/api/songs'));
+      expect(songsRes.statusCode, 200);
+      final songsJson = json.decode(songsRes.body);
+      expect(songsJson['songs'], isA<List>());
+
+      // Test /api/videos
+      final videosRes = await client.get(Uri.parse('${server.serverUrl}/api/videos'));
+      expect(videosRes.statusCode, 200);
+      final videosJson = json.decode(videosRes.body);
+      expect(videosJson['videos'], isA<List>());
+
+      // Test /api/app/version
+      final appVerRes = await client.get(Uri.parse('${server.serverUrl}/api/app/version'));
+      expect(appVerRes.statusCode, 200);
+      final appVerJson = json.decode(appVerRes.body);
+      expect(appVerJson['version'], isNotNull);
+      expect(appVerJson['build_number'], isNotNull);
+
+      await server.stop();
+      expect(server.isRunning, false);
+      client.close();
+    });
+
+    test('AppUpdateService detects newer peer updates on local mesh', () {
+      final peers = [
+        PeerNode(
+          id: 'peer-old',
+          name: 'Old Peer',
+          host: '192.168.1.10',
+          appVersion: '1.0.0',
+          buildNumber: 1,
+        ),
+        PeerNode(
+          id: 'peer-new',
+          name: 'Alex (New Node)',
+          host: '192.168.1.50',
+          appVersion: '1.0.2',
+          buildNumber: 3,
+        ),
+      ];
+
+      final update = AppUpdateService.checkPeerUpdates(peers);
+      expect(update, isNotNull);
+      expect(update!.version, '1.0.2');
+      expect(update.buildNumber, 3);
+      expect(update.isPeerUpdate, true);
+      expect(update.sourceName, 'Alex (New Node)');
+    });
+  });
+
+  test('Offline demo resolves playable asset entries without HTTP', () async {
+    TestWidgetsFlutterBinding.ensureInitialized();
+    final api = ApiService(initialHost: 'http://demo.hub');
+    await HttpOverrides.runZoned(() async {
+      final peer = (await api.fetchDiscoveredPeers()).single;
+      final songs = [...await api.fetchLocalSongs(), ...await api.fetchPeerSongs(peer)];
+      final videos = [...await api.fetchLocalVideos(), ...await api.fetchPeerVideos(peer)];
+      expect(songs, hasLength(2));
+      expect(videos, hasLength(2));
+      for (final asset in [
+        ...songs.map((song) => song.demoAsset!),
+        ...videos.map((video) => video.demoAsset!),
+      ]) {
+        final data = await rootBundle.load(asset);
+        expect(data.lengthInBytes, greaterThan(8));
+        expect(String.fromCharCodes(data.buffer.asUint8List(data.offsetInBytes + 4, 4)), 'ftyp');
+      }
+    }, createHttpClient: (_) => throw StateError('Demo attempted to use HTTP'));
+  });
+}
