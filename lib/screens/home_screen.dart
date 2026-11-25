@@ -4,6 +4,7 @@ import '../providers/hypermesh_provider.dart';
 import '../providers/player_provider.dart';
 import '../services/extension_patch_service.dart';
 import '../widgets/server_downloader_dialog.dart';
+import '../widgets/local_folders_sheet.dart';
 import '../theme/app_theme.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/song_tile.dart';
@@ -144,20 +145,9 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         elevation: 0,
                       ),
-                      icon: const Icon(Icons.add, size: 16),
-                      label: const Text("Add Music", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      onPressed: () async {
-                        final added = await hypermesh.pickLocalFiles(isVideo: false);
-                        if (mounted && added > 0) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text("Added $added song(s) to your library & mesh!"),
-                              backgroundColor: AppTheme.emeraldAccent,
-                            ),
-                          );
-                          await hypermesh.checkAndPromptBackgroundSharing(context);
-                        }
-                      },
+                      icon: const Icon(Icons.folder_open, size: 16),
+                      label: const Text("Folders / Add", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      onPressed: () => LocalFoldersSheet.show(context, defaultVideo: false),
                     ),
                     const SizedBox(width: 8),
                     // Peer status pill
@@ -316,8 +306,8 @@ class _HomeScreenState extends State<HomeScreen> {
                                   elevation: 0,
                                 ),
                                 icon: const Icon(Icons.folder_open, size: 20),
-                                label: const Text("Select Music from Device", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                onPressed: () => hypermesh.pickLocalFiles(isVideo: false),
+                                label: const Text("Select Music / Video Folders", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                onPressed: () => LocalFoldersSheet.show(context, defaultVideo: false),
                               ),
                             ],
                           ),

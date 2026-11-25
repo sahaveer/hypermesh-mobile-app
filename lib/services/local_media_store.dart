@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/song.dart';
 import '../models/video_item.dart';
@@ -29,38 +30,72 @@ class SharedMediaFile {
   });
 
   Map<String, dynamic> toJson() => {
-    'id': id,
-    'path': path,
-    'name': name,
-    'size': size,
-    'isVideo': isVideo,
-    'duration': duration,
-    'resolution': resolution,
-  };
+        'id': id,
+        'path': path,
+        'name': name,
+        'size': size,
+        'isVideo': isVideo,
+        'duration': duration,
+        'resolution': resolution,
+      };
 
   factory SharedMediaFile.fromJson(Map<String, dynamic> json) => SharedMediaFile(
-    id: json['id'] ?? '',
-    path: json['path'] ?? '',
-    name: json['name'] ?? '',
-    size: json['size'] ?? 0,
-    isVideo: json['isVideo'] ?? false,
-    duration: (json['duration'] is num) ? (json['duration'] as num).toDouble() : 0.0,
-    resolution: json['resolution'] ?? "1080p FHD",
-  );
+        id: json['id'] ?? '',
+        path: json['path'] ?? '',
+        name: json['name'] ?? '',
+        size: json['size'] ?? 0,
+        isVideo: json['isVideo'] ?? false,
+        duration: (json['duration'] is num) ? (json['duration'] as num).toDouble() : 0.0,
+        resolution: json['resolution'] ?? "1080p FHD",
+      );
 }
 
 class LocalMediaStore {
   static const String _storageKey = "hypermesh_shared_files_v1";
+  static const String _foldersKey = "hypermesh_shared_folders_v1";
+
+  static const Set<String> audioExtensions = {
+    '.mp3',
+    '.flac',
+    '.m4a',
+    '.aac',
+    '.ogg',
+    '.opus',
+    '.wav',
+    '.wma',
+  };
+
+  static const Set<String> videoExtensions = {
+    '.mp4',
+    '.mkv',
+    '.mov',
+    '.avi',
+    '.m4v',
+    '.webm',
+    '.ts',
+  };
+
   final List<SharedMediaFile> _sharedFiles = [];
+  final List<String> _sharedFolders = [];
 
   List<SharedMediaFile> get sharedFiles => List.unmodifiable(_sharedFiles);
   List<SharedMediaFile> get sharedSongs => _sharedFiles.where((f) => !f.isVideo).toList();
   List<SharedMediaFile> get sharedVideos => _sharedFiles.where((f) => f.isVideo).toList();
+  List<String> get sharedFolders => List.unmodifiable(_sharedFolders);
 
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     final rawList = prefs.getStringList(_storageKey) ?? [];
+    final rawFolders = prefs.getStringList(_foldersKey) ?? [];
     _sharedFiles.clear();
+    _sharedFolders.clear();
+
+    for (final folder in rawFolders) {
+      final clean = folder.trim();
+      if (clean.isNotEmpty && !_sharedFolders.contains(clean) && Directory(clean).existsSync()) {
+        _sharedFolders.add(clean);
+      }
+    }
 
     for (final raw in rawList) {
       try {
@@ -71,6 +106,10 @@ class LocalMediaStore {
         }
       } catch (_) {}
     }
+
+    if (_sharedFolders.isNotEmpty) {
+      await rescanAllFolders();
+    }
   }
 
   Future<void> save() async {
@@ -79,6 +118,159 @@ class LocalMediaStore {
     if (!await prefs.setStringList(_storageKey, rawList)) {
       throw FileSystemException('Could not save the local library');
     }
+    await prefs.setStringList(_foldersKey, _sharedFolders);
+  }
+
+  Future<bool> _ensureStoragePermissions() async {
+    if (!Platform.isAndroid) return true;
+    try {
+      final statuses = await [
+        Permission.audio,
+        Permission.videos,
+        Permission.storage,
+      ].request();
+      final audioOk = statuses[Permission.audio]?.isGranted ?? false;
+      final videoOk = statuses[Permission.videos]?.isGranted ?? false;
+      final storageOk = statuses[Permission.storage]?.isGranted ?? false;
+      return audioOk || videoOk || storageOk;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  /// Opens native directory picker and scans all audio & video files inside.
+  Future<({String? folderPath, List<SharedMediaFile> added, String? error})> pickAndAddFolder() async {
+    try {
+      final granted = await _ensureStoragePermissions();
+      if (!granted) {
+        return (
+          folderPath: null,
+          added: <SharedMediaFile>[],
+          error: "Storage/media permission denied. Please allow Audio & Video access in Settings.",
+        );
+      }
+
+      final folderPath = await FilePicker.getDirectoryPath(
+        dialogTitle: "Select Music or Video Folder",
+      );
+
+      if (folderPath == null || folderPath.trim().isEmpty) {
+        return (folderPath: null, added: <SharedMediaFile>[], error: null);
+      }
+
+      final added = await addAndScanFolder(folderPath);
+      return (folderPath: folderPath, added: added, error: null);
+    } catch (e) {
+      debugPrint("Error picking folder: $e");
+      return (folderPath: null, added: <SharedMediaFile>[], error: "Could not read folder: $e");
+    }
+  }
+
+  /// Registers [folderPath] and scans all supported audio/video files inside it.
+  Future<List<SharedMediaFile>> addAndScanFolder(String folderPath) async {
+    final normalized = folderPath.trim();
+    if (normalized.isEmpty) return [];
+
+    if (!_sharedFolders.contains(normalized)) {
+      _sharedFolders.add(normalized);
+    }
+
+    final added = await scanFolder(normalized);
+    await save();
+    return added;
+  }
+
+  /// Scans [folderPath] recursively for audio & video files not yet in [_sharedFiles].
+  Future<List<SharedMediaFile>> scanFolder(String folderPath) async {
+    final dir = Directory(folderPath);
+    if (!dir.existsSync()) return [];
+
+    final existingPaths = _sharedFiles.map((f) => f.path).toSet();
+    final added = <SharedMediaFile>[];
+    final queue = <Directory>[dir];
+
+    while (queue.isNotEmpty) {
+      final current = queue.removeLast();
+      List<FileSystemEntity> entries;
+      try {
+        entries = current.listSync(followLinks: false);
+      } catch (_) {
+        continue;
+      }
+
+      for (final entity in entries) {
+        if (entity is Directory) {
+          final base = _basename(entity.path);
+          if (!base.startsWith('.')) {
+            queue.add(entity);
+          }
+          continue;
+        }
+        if (entity is! File) continue;
+
+        final filePath = entity.path;
+        if (existingPaths.contains(filePath)) continue;
+
+        final ext = _extension(filePath);
+        final isAudio = audioExtensions.contains(ext);
+        final isVideo = videoExtensions.contains(ext);
+        if (!isAudio && !isVideo) continue;
+
+        int fileSize = 0;
+        try {
+          fileSize = entity.lengthSync();
+        } catch (_) {}
+
+        final fileName = _basename(filePath);
+        final id = "local_${DateTime.now().microsecondsSinceEpoch}_${added.length}";
+        final item = SharedMediaFile(
+          id: id,
+          path: filePath,
+          name: fileName,
+          size: fileSize,
+          isVideo: isVideo,
+          duration: _estimateDuration(fileSize, isVideo: isVideo),
+          resolution: isVideo ? _guessResolution(fileName) : "",
+        );
+
+        _sharedFiles.insert(0, item);
+        existingPaths.add(filePath);
+        added.add(item);
+      }
+    }
+
+    return added;
+  }
+
+  /// Prunes missing files and rescans every saved folder.
+  Future<int> rescanAllFolders() async {
+    _sharedFiles.removeWhere((item) => !File(item.path).existsSync());
+    int totalAdded = 0;
+    for (final folder in List<String>.from(_sharedFolders)) {
+      final added = await scanFolder(folder);
+      totalAdded += added.length;
+    }
+    await save();
+    return totalAdded;
+  }
+
+  /// Removes a linked folder and unshares files located inside it.
+  Future<void> removeFolder(String folderPath) async {
+    final normalized = _normalizeDirPrefix(folderPath);
+    _sharedFolders.removeWhere((f) => _normalizeDirPrefix(f) == normalized);
+    _sharedFiles.removeWhere((item) {
+      final itemNorm = item.path.replaceAll('\\', '/');
+      return itemNorm == normalized || itemNorm.startsWith('$normalized/');
+    });
+    await save();
+  }
+
+  int countFilesInFolder(String folderPath) {
+    final normalized = _normalizeDirPrefix(folderPath);
+    return _sharedFiles.where((item) {
+      final itemNorm = item.path.replaceAll('\\', '/');
+      return itemNorm == normalized || itemNorm.startsWith('$normalized/');
+    }).length;
   }
 
   /// Lets the user pick audio or video files from device storage
@@ -102,18 +294,8 @@ class LocalMediaStore {
         if (_sharedFiles.any((f) => f.path == picked.path)) continue;
 
         final fileName = picked.name;
-        final fileSize = file.existsSync() ? file.lengthSync() : (picked.lengthSync() ?? 0);
+        final fileSize = file.lengthSync();
         final id = "local_${DateTime.now().microsecondsSinceEpoch}_${added.length}";
-
-        // Estimate duration if unknown (approximate 1.5MB per min for 192k audio, 1GB per hr for video)
-        double estimatedDuration = 0.0;
-        if (isVideo) {
-          final hours = fileSize / (1024 * 1024 * 1024); // ~1GB/hr
-          estimatedDuration = (hours * 3600).clamp(60.0, 14400.0);
-        } else {
-          final mins = fileSize / (1.5 * 1024 * 1024);
-          estimatedDuration = (mins * 60).clamp(30.0, 3600.0);
-        }
 
         final item = SharedMediaFile(
           id: id,
@@ -121,7 +303,7 @@ class LocalMediaStore {
           name: fileName,
           size: fileSize,
           isVideo: isVideo,
-          duration: estimatedDuration,
+          duration: _estimateDuration(fileSize, isVideo: isVideo),
           resolution: isVideo ? _guessResolution(fileName) : "",
         );
 
@@ -229,7 +411,9 @@ class LocalMediaStore {
         final disposition = response.headers['content-disposition'] ?? '';
         final remoteName = RegExp(r'filename="?([^";]+)').firstMatch(disposition)?.group(1) ?? '';
         final extension = RegExp(r'\.(mp3|aac|m4a|flac|wav|ogg|opus|mp4|mkv|webm|mov|avi)$',
-          caseSensitive: false).firstMatch(remoteName)?.group(0);
+                caseSensitive: false)
+            .firstMatch(remoteName)
+            ?.group(0);
         if (extension != null) {
           final dot = safeName.lastIndexOf('.');
           name = (dot > 0 ? safeName.substring(0, dot) : safeName) + extension;
@@ -280,6 +464,35 @@ class LocalMediaStore {
     } finally {
       client.close();
     }
+  }
+
+  static double _estimateDuration(int fileSize, {required bool isVideo}) {
+    if (isVideo) {
+      final hours = fileSize / (1024 * 1024 * 1024);
+      return (hours * 3600).clamp(60.0, 14400.0);
+    }
+    final mins = fileSize / (1.5 * 1024 * 1024);
+    return (mins * 60).clamp(30.0, 3600.0);
+  }
+
+  static String _basename(String path) {
+    final norm = path.replaceAll('\\', '/');
+    final idx = norm.lastIndexOf('/');
+    return idx >= 0 ? norm.substring(idx + 1) : norm;
+  }
+
+  static String _extension(String path) {
+    final base = _basename(path);
+    final idx = base.lastIndexOf('.');
+    return idx >= 0 ? base.substring(idx).toLowerCase() : '';
+  }
+
+  static String _normalizeDirPrefix(String path) {
+    var norm = path.replaceAll('\\', '/');
+    while (norm.endsWith('/') && norm.length > 1) {
+      norm = norm.substring(0, norm.length - 1);
+    }
+    return norm;
   }
 
   static String cleanTitle(String rawName) {

@@ -221,7 +221,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
         final newVolume = (_initialVolume + deltaFraction).clamp(0.0, 1.0);
         _currentVolume = newVolume;
         DeviceControlsService.setDeviceVolume(newVolume);
-        _controller.setVolume(newVolume);
+        if (!Platform.isAndroid) {
+          _controller.setVolume(newVolume);
+        }
         setState(() {
           _showGestureHud = true;
         });
@@ -757,6 +759,61 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                             Text(
                               _isInitialized ? _formatDuration(_controller.value.position) : "0:00",
                               style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                            ),
+                            Expanded(
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 12),
+                                child: Row(
+                                  children: [
+                                    GestureDetector(
+                                      onTap: () {
+                                        final nextVol = _currentVolume > 0.01 ? 0.0 : 0.75;
+                                        setState(() => _currentVolume = nextVol);
+                                        DeviceControlsService.setDeviceVolume(nextVol);
+                                        if (!Platform.isAndroid) {
+                                          _controller.setVolume(nextVol);
+                                        }
+                                        _startHideControlsTimer();
+                                      },
+                                      child: Icon(
+                                        _currentVolume <= 0.01
+                                            ? Icons.volume_off
+                                            : _currentVolume < 0.5
+                                                ? Icons.volume_down
+                                                : Icons.volume_up,
+                                        color: AppTheme.cyanAccent,
+                                        size: 18,
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: SliderTheme(
+                                        data: SliderTheme.of(context).copyWith(
+                                          trackHeight: 2.5,
+                                          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 12),
+                                        ),
+                                        child: Slider(
+                                          value: _currentVolume.clamp(0.0, 1.0),
+                                          activeColor: AppTheme.cyanAccent,
+                                          inactiveColor: Colors.white24,
+                                          onChanged: (val) {
+                                            setState(() => _currentVolume = val);
+                                            DeviceControlsService.setDeviceVolume(val);
+                                            if (!Platform.isAndroid) {
+                                              _controller.setVolume(val);
+                                            }
+                                            _startHideControlsTimer();
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      "${(_currentVolume * 100).round()}%",
+                                      style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                             Text(
                               _isInitialized ? _formatDuration(_controller.value.duration) : widget.video.formattedDuration,

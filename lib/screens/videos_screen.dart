@@ -4,6 +4,7 @@ import '../models/video_item.dart';
 import '../providers/hypermesh_provider.dart';
 import '../services/extension_patch_service.dart';
 import '../widgets/server_downloader_dialog.dart';
+import '../widgets/local_folders_sheet.dart';
 import '../theme/app_theme.dart';
 import '../widgets/download_destination_sheet.dart';
 import '../widgets/admin_delete_dialog.dart';
@@ -192,22 +193,9 @@ class VideosScreen extends StatelessWidget {
                         ),
                         elevation: 0,
                       ),
-                      icon: const Icon(Icons.add, size: 16),
-                      label: const Text("Add Videos", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-                      onPressed: () async {
-                        final added = await hypermesh.pickLocalFiles(isVideo: true);
-                        if (context.mounted && added > 0) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text("Added $added video(s) to your library & mesh!"),
-                              backgroundColor: AppTheme.emeraldAccent,
-                            ),
-                          );
-                          if (context.mounted) {
-                            await hypermesh.checkAndPromptBackgroundSharing(context);
-                          }
-                        }
-                      },
+                      icon: const Icon(Icons.folder_open, size: 16),
+                      label: const Text("Folders / Add", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      onPressed: () => LocalFoldersSheet.show(context, defaultVideo: true),
                     ),
                     const SizedBox(width: 8),
                     Container(
@@ -316,8 +304,8 @@ class VideosScreen extends StatelessWidget {
                                   elevation: 0,
                                 ),
                                 icon: const Icon(Icons.folder_open, size: 20),
-                                label: const Text("Select Videos from Device", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                onPressed: () => hypermesh.pickLocalFiles(isVideo: true),
+                                label: const Text("Select Video / Music Folders", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                                onPressed: () => LocalFoldersSheet.show(context, defaultVideo: true),
                               ),
                             ],
                           ),

@@ -18,6 +18,7 @@ class LocalMeshDiscovery {
   Timer? _pruneTimer;
 
   final Map<String, PeerNode> _peers = {};
+  final Map<String, PeerNode> _manualPeers = {};
   final Function(List<PeerNode> peers)? onPeersChanged;
 
   bool _isDiscovering = false;
@@ -32,7 +33,10 @@ class LocalMeshDiscovery {
   });
 
   bool get isDiscovering => _isDiscovering;
-  List<PeerNode> get peers => _peers.values.toList();
+  List<PeerNode> get peers => {
+        ..._manualPeers,
+        ..._peers,
+      }.values.toList();
 
   Future<bool> start() async {
     if (_isDiscovering) return true;
@@ -170,17 +174,29 @@ class LocalMeshDiscovery {
   /// Manually add peer by IP (for QR code scan or direct IP input)
   void addManualPeer(String host, int port, {String name = "Manual Peer"}) {
     final id = "manual_${host.replaceAll('.', '_')}_$port";
-    _peers[id] = PeerNode(
-      id: id,
-      name: name,
-      host: host,
-      port: port,
-      musicCount: 0,
-      videoCount: 0,
-      isOnline: true,
-      lastSeen: DateTime.now(),
+    addManualPeerNode(
+      PeerNode(
+        id: id,
+        name: name,
+        host: host,
+        port: port,
+        musicCount: 0,
+        videoCount: 0,
+        isOnline: true,
+        lastSeen: DateTime.now(),
+      ),
     );
+  }
+
+  void addManualPeerNode(PeerNode peer) {
+    _manualPeers[peer.id] = peer;
     onPeersChanged?.call(peers);
+  }
+
+  void removeManualPeer(String id) {
+    if (_manualPeers.remove(id) != null) {
+      onPeersChanged?.call(peers);
+    }
   }
 
   Future<void> stop() async {
@@ -192,5 +208,6 @@ class LocalMeshDiscovery {
     _socket?.close();
     _socket = null;
     _peers.clear();
+    _manualPeers.clear();
   }
 }

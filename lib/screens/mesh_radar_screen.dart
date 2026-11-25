@@ -1,12 +1,105 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../providers/hypermesh_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/background_sharing_dialog.dart';
 import '../widgets/app_update_dialog.dart';
+import 'qr_peer_scanner_screen.dart';
 
 class MeshRadarScreen extends StatelessWidget {
   const MeshRadarScreen({super.key});
+
+  void _showMyQrSheet(BuildContext context, HypermeshProvider hypermesh) {
+    final shareUrl = hypermesh.localShareUrl;
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 44,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppTheme.border,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+              ),
+              const SizedBox(height: 16),
+              Text(
+                "${hypermesh.deviceName} • Share QR",
+                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+              ),
+              const SizedBox(height: 6),
+              const Text(
+                "Friends on the same Wi-Fi or Hotspot can scan this QR from their Hypermesh app to stream your songs & videos.",
+                textAlign: TextAlign.center,
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
+              ),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(18),
+                ),
+                child: QrImageView(
+                  data: shareUrl,
+                  version: QrVersions.auto,
+                  size: 200,
+                  backgroundColor: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 14),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: AppTheme.surfaceLight,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: AppTheme.border),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.link, color: AppTheme.cyanAccent, size: 18),
+                    const SizedBox(width: 8),
+                    SelectableText(
+                      shareUrl,
+                      style: const TextStyle(color: AppTheme.cyanAccent, fontWeight: FontWeight.bold, fontSize: 13),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      icon: const Icon(Icons.copy, size: 18, color: Colors.white70),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: shareUrl));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text("Copied $shareUrl"), backgroundColor: AppTheme.cyanAccent),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                "Sharing ${hypermesh.totalLocalCount} songs & ${hypermesh.totalLocalVideosCount} videos",
+                style: const TextStyle(color: AppTheme.emeraldAccent, fontSize: 12, fontWeight: FontWeight.w600),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 
   void _showEditNodeNameDialog(BuildContext context, HypermeshProvider hypermesh) {
     final controller = TextEditingController(text: hypermesh.deviceName);
@@ -278,6 +371,45 @@ class MeshRadarScreen extends StatelessWidget {
                 videosCount: hypermesh.totalLocalVideosCount,
                 isHost: true,
               ),
+            ),
+            const SizedBox(height: 12),
+
+            // QR Connect & Share Actions
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.cyanAccent,
+                      foregroundColor: Colors.black,
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () => _showMyQrSheet(context, hypermesh),
+                    icon: const Icon(Icons.qr_code_2, size: 20),
+                    label: const Text("Show My QR", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppTheme.purpleAccent,
+                      side: const BorderSide(color: AppTheme.purpleAccent),
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    ),
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => const QrPeerScannerScreen()),
+                      );
+                    },
+                    icon: const Icon(Icons.qr_code_scanner, size: 20),
+                    label: const Text("Scan Peer QR", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  ),
+                ),
+              ],
             ),
             const SizedBox(height: 12),
 

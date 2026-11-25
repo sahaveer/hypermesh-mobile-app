@@ -15,7 +15,7 @@ val releaseSigning = Properties().apply {
 
 android {
     namespace = "com.hypermesh.player.hypermesh_player"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

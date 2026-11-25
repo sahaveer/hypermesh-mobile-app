@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/song.dart';
 import '../models/video_item.dart';
@@ -63,6 +64,8 @@ class HypermeshProvider extends ChangeNotifier {
   int get localNodePort => _localMeshServer?.port ?? 8080;
   bool get isServerRunning => _localMeshServer?.isRunning ?? false;
   int get sharedFilesCount => localMediaStore.sharedFiles.length;
+  List<String> get sharedFolders => localMediaStore.sharedFolders;
+  String get localShareUrl => "http://$localNodeIp:$localNodePort";
   bool get isBackgroundServiceEnabled => _isBackgroundServiceEnabled;
   bool _isBackgroundServiceEnabled = false;
   bool _serverDownloaderAvailable = false;
@@ -299,7 +302,126 @@ class HypermeshProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- FILE PICKER FOR SHARING ---
+  // --- FILE & FOLDER PICKER FOR SHARING ---
+  Future<({String? folderPath, int addedCount, String? error})> pickLocalFolder() async {
+    final res = await localMediaStore.pickAndAddFolder();
+    if (res.folderPath != null) {
+      _localMeshDiscovery?.updateMediaCounts(
+        music: localMediaStore.sharedSongs.length,
+        video: localMediaStore.sharedVideos.length,
+      );
+      await refreshLibrary();
+      _updateBackgroundNotification();
+    }
+    return (folderPath: res.folderPath, addedCount: res.added.length, error: res.error);
+  }
+
+  Future<int> rescanLocalFolders() async {
+    final added = await localMediaStore.rescanAllFolders();
+    _localMeshDiscovery?.updateMediaCounts(
+      music: localMediaStore.sharedSongs.length,
+      video: localMediaStore.sharedVideos.length,
+    );
+    await refreshLibrary();
+    _updateBackgroundNotification();
+    return added;
+  }
+
+  Future<void> removeLocalFolder(String folderPath) async {
+    await localMediaStore.removeFolder(folderPath);
+    _localMeshDiscovery?.updateMediaCounts(
+      music: localMediaStore.sharedSongs.length,
+      video: localMediaStore.sharedVideos.length,
+    );
+    await refreshLibrary();
+    _updateBackgroundNotification();
+  }
+
+  Future<({bool ok, String message, PeerNode? peer})> connectPeerByQrOrUrl(String rawInput) async {
+    final parsed = parsePeerAddress(rawInput);
+    if (parsed == null) {
+      return (ok: false, message: "Invalid peer QR code or IP address.", peer: null);
+    }
+
+    final (host, port) = parsed;
+    if (host == localNodeIp && port == localNodePort) {
+      return (ok: false, message: "That is this device's own QR code.", peer: null);
+    }
+
+    try {
+      final uri = Uri.parse("http://$host:$port/api/info");
+      final response = await http.get(uri).timeout(const Duration(seconds: 4));
+      if (response.statusCode != 200) {
+        return (
+          ok: false,
+          message: "Peer returned HTTP ${response.statusCode}. Make sure both phones are on the same Wi-Fi or Hotspot.",
+          peer: null,
+        );
+      }
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final peerId = data['id']?.toString() ?? "manual_${host.replaceAll('.', '_')}_$port";
+      final peerName = data['name']?.toString() ?? "Mobile Peer";
+      final musicCount = (data['music_count'] is num) ? (data['music_count'] as num).toInt() : 0;
+      final videoCount = (data['video_count'] is num) ? (data['video_count'] as num).toInt() : 0;
+      final appVersion = data['app_version']?.toString() ?? '1.0.0';
+      final buildNumber = (data['build_number'] is num) ? (data['build_number'] as num).toInt() : 1;
+
+      final peer = PeerNode(
+        id: peerId,
+        name: peerName,
+        host: host,
+        port: port,
+        musicCount: musicCount,
+        videoCount: videoCount,
+        isOnline: true,
+        lastSeen: DateTime.now(),
+        appVersion: appVersion,
+        buildNumber: buildNumber,
+      );
+
+      _localMeshDiscovery?.addManualPeerNode(peer);
+      _mergePeers(_localMeshDiscovery?.peers ?? []);
+      await _syncPeerMedia();
+      _updateBackgroundNotification();
+      notifyListeners();
+
+      return (
+        ok: true,
+        message: "Connected to $peerName ($musicCount songs, $videoCount videos)",
+        peer: peer,
+      );
+    } catch (e) {
+      return (
+        ok: false,
+        message: "Could not reach http://$host:$port. Ensure both devices are on the same Wi-Fi/Hotspot.",
+        peer: null,
+      );
+    }
+  }
+
+  static (String, int)? parsePeerAddress(String rawInput) {
+    var text = rawInput.trim();
+    if (text.isEmpty) return null;
+
+    if (text.startsWith('{')) {
+      try {
+        final map = json.decode(text) as Map<String, dynamic>;
+        final h = map['host']?.toString().trim() ?? '';
+        final p = (map['port'] is num) ? (map['port'] as num).toInt() : 8080;
+        if (h.isNotEmpty) return (h, p);
+      } catch (_) {}
+    }
+
+    if (!text.startsWith('http://') && !text.startsWith('https://')) {
+      text = 'http://$text';
+    }
+    final uri = Uri.tryParse(text);
+    if (uri == null || uri.host.isEmpty) return null;
+    final port = uri.hasPort ? uri.port : 8080;
+    return (uri.host, port);
+  }
+
   Future<int> pickLocalFiles({required bool isVideo}) async {
     final added = await localMediaStore.pickAndAddFiles(isVideo: isVideo);
     if (added.isNotEmpty) {

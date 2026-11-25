@@ -7,7 +7,10 @@ import 'package:hypermesh_player/services/local_media_store.dart';
 import 'package:hypermesh_player/services/api_service.dart';
 import 'package:hypermesh_player/services/local_mesh_server.dart';
 import 'package:hypermesh_player/services/app_update_service.dart';
+import 'package:hypermesh_player/services/local_mesh_discovery.dart';
+import 'package:hypermesh_player/providers/hypermesh_provider.dart';
 import 'package:hypermesh_player/models/peer_node.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   group('Standalone Mobile Mesh Unit Tests', () {
@@ -107,6 +110,63 @@ void main() {
       expect(update.buildNumber, 3);
       expect(update.isPeerUpdate, true);
       expect(update.sourceName, 'Alex (New Node)');
+    });
+
+    test('LocalMediaStore scans multiple folders and removes folder cleanly', () async {
+      SharedPreferences.setMockInitialValues({});
+      final tempRoot = await Directory.systemTemp.createTemp('hypermesh_folders_');
+      try {
+        final musicDir = await Directory('${tempRoot.path}/Music').create();
+        final moviesDir = await Directory('${tempRoot.path}/Movies/Sub').create(recursive: true);
+
+        await File('${musicDir.path}/track1.mp3').writeAsBytes([1, 2, 3]);
+        await File('${musicDir.path}/notes.txt').writeAsString('ignore');
+        await File('${moviesDir.path}/clip.mp4').writeAsBytes([4, 5, 6]);
+
+        final store = LocalMediaStore();
+        final addedMusic = await store.addAndScanFolder(musicDir.path);
+        final addedMovies = await store.addAndScanFolder('${tempRoot.path}/Movies');
+
+        expect(addedMusic, hasLength(1));
+        expect(addedMovies, hasLength(1));
+        expect(store.sharedFolders, hasLength(2));
+        expect(store.sharedSongs, hasLength(1));
+        expect(store.sharedVideos, hasLength(1));
+        expect(store.countFilesInFolder(musicDir.path), 1);
+
+        // Rescanning same folder does not duplicate
+        final dupScan = await store.addAndScanFolder(musicDir.path);
+        expect(dupScan, isEmpty);
+        expect(store.sharedSongs, hasLength(1));
+
+        // Removing music folder leaves movies intact
+        await store.removeFolder(musicDir.path);
+        expect(store.sharedFolders, hasLength(1));
+        expect(store.sharedSongs, isEmpty);
+        expect(store.sharedVideos, hasLength(1));
+      } finally {
+        await tempRoot.delete(recursive: true);
+      }
+    });
+
+    test('QR peer address parsing and manual peer retention', () {
+      expect(HypermeshProvider.parsePeerAddress('http://192.168.43.1:8080'), ('192.168.43.1', 8080));
+      expect(HypermeshProvider.parsePeerAddress('192.168.1.25:9000'), ('192.168.1.25', 9000));
+      expect(HypermeshProvider.parsePeerAddress('192.168.1.25'), ('192.168.1.25', 8080));
+      expect(
+        HypermeshProvider.parsePeerAddress('{"host":"10.0.0.5","port":8081}'),
+        ('10.0.0.5', 8081),
+      );
+      expect(HypermeshProvider.parsePeerAddress(''), isNull);
+
+      final discovery = LocalMeshDiscovery(
+        deviceId: 'self',
+        deviceName: 'Self',
+        serverPort: 8080,
+      );
+      discovery.addManualPeer('192.168.1.44', 8080, name: 'Friend Phone');
+      expect(discovery.peers, hasLength(1));
+      expect(discovery.peers.first.name, 'Friend Phone');
     });
   });
 

@@ -246,6 +246,49 @@ class NowPlayingSheet extends StatelessWidget {
                   ),
                 ],
               ),
+              const SizedBox(height: 16),
+
+              // In-App Volume Slider
+              Row(
+                children: [
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    icon: Icon(
+                      player.volume <= 0.01
+                          ? Icons.volume_off
+                          : player.volume < 0.5
+                              ? Icons.volume_down
+                              : Icons.volume_up,
+                      color: AppTheme.textSecondary,
+                      size: 20,
+                    ),
+                    onPressed: () => player.setVolume(player.volume > 0.01 ? 0.0 : 0.75),
+                  ),
+                  Expanded(
+                    child: SliderTheme(
+                      data: SliderTheme.of(context).copyWith(
+                        trackHeight: 3,
+                        thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                        overlayShape: const RoundSliderOverlayShape(overlayRadius: 14),
+                      ),
+                      child: Slider(
+                        value: player.volume.clamp(0.0, 1.0),
+                        activeColor: song.isPeer ? AppTheme.purpleAccent : AppTheme.cyanAccent,
+                        inactiveColor: AppTheme.surfaceLight,
+                        onChanged: (val) => player.setVolume(val),
+                      ),
+                    ),
+                  ),
+                  SizedBox(
+                    width: 38,
+                    child: Text(
+                      "${(player.volume * 100).round()}%",
+                      textAlign: TextAlign.end,
+                      style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                ],
+              ),
               const Spacer(flex: 1),
             ],
           ),

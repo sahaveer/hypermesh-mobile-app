@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import '../models/song.dart';
 import '../services/api_service.dart';
+import '../services/device_controls_service.dart';
 
 class PlayerProvider extends ChangeNotifier {
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -18,9 +19,11 @@ class PlayerProvider extends ChangeNotifier {
   Duration _duration = Duration.zero;
   bool _isShuffle = false;
   LoopMode _loopMode = LoopMode.off;
+  double _volume = 1.0;
 
   PlayerProvider({required this.apiService}) {
     _initListeners();
+    _initVolume();
   }
 
   Song? get currentSong => _currentSong;
@@ -30,6 +33,25 @@ class PlayerProvider extends ChangeNotifier {
   Duration get duration => _duration;
   bool get isShuffle => _isShuffle;
   bool get isRepeat => _loopMode == LoopMode.one;
+  double get volume => _volume;
+
+  Future<void> _initVolume() async {
+    if (Platform.isAndroid) {
+      _volume = await DeviceControlsService.getDeviceVolume();
+      notifyListeners();
+    }
+  }
+
+  Future<void> setVolume(double value) async {
+    final clamped = value.clamp(0.0, 1.0);
+    _volume = clamped;
+    notifyListeners();
+    if (Platform.isAndroid) {
+      await DeviceControlsService.setDeviceVolume(clamped);
+    } else {
+      await _audioPlayer.setVolume(clamped);
+    }
+  }
 
   void _initListeners() {
     _audioPlayer.playerStateStream.listen((state) {
