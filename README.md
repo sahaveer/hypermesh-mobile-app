@@ -1,52 +1,79 @@
-# Hypermesh Media Player (Open-Source Android & Flutter App)
+# Hypermesh Media Player (Open-Source Mesh Player & Mobile Client)
 
-A sleek, open-source cross-platform mobile client built with **Flutter** for the **Hypermesh Media Hub** ecosystem.
+[![Download Android APK](https://img.shields.io/badge/Download_APK-v1.0.0%2B1-00E5FF?style=for-the-badge&logo=android&logoColor=black)](https://github.com/sahaveer/hypermesh-mobile-app/releases/latest/download/hypermeshmediaplayer.apk)
 
-Connect your Android phone (or iOS / Web / Desktop client) to your personal Media Hub running on **an old PC, spare laptop, Raspberry Pi, or even another Android phone (Termux)** — and stream music, movies, and photos over Wi-Fi, Tailscale, or Cloudflare Tunnel with zero subscriptions.
-
-> **Companion Server Repo:** Host your own personal media server & `yt-dlp` downloader using [`sahaveer/hypermesh-media-hub`](https://github.com/sahaveer/hypermesh-media-hub).
+A sleek, open-source **Peer-to-Peer Mesh Media Player** built with **Flutter** for Android (plus iOS, Web, and Desktop).
 
 ---
 
-## Key Features
+## Install Directly on Android (No Build Needed)
 
-- **Unified Hypermesh Library**: Aggregates songs & videos across your personal Hub and nearby local mesh peers without duplicating files.
-- **Multi-Mode Hub Connection**:
-  - **Local Wi-Fi Mesh** (`http://192.168.x.x:8000`) — `0 MB` internet data used
-  - **Tailscale Private Mesh** (`http://100.x.y.z:8000`) — encrypted WireGuard streaming anywhere
-  - **Cloudflare Tunnel** (`https://*.trycloudflare.com`) — access over 4G/5G without router port forwarding
-  - **Built-in Demo Hub** (`http://demo.hub`) — try the full player offline without running a server
-- **Remote Server Downloader (`yt-dlp` Bridge)**: Send YouTube / Spotify / media links from your phone directly to your Hub's downloader queue or save locally.
-- **Offline Pinning & Mobile-to-Mobile Mesh**: Pin peer tracks locally for offline playback and share your phone's local media over Wi-Fi using the built-in local mesh server.
-- **Over-the-Air (OTA) & P2P APK Updates**: Pulls new Android APK builds from your Hub (`/hypermeshmediaplayer.apk`) or nearby mesh peers.
-- **Obsidian / Neon UI**: Floating mini-player, expandable Now Playing sheet, Mesh Radar, Playlists, Video Player, and Host Admin tools.
+You can download and run the app directly on any Android phone using the GitHub Release:
+
+1. **Direct APK Download:** [`hypermeshmediaplayer.apk` (Latest Release)](https://github.com/sahaveer/hypermesh-mobile-app/releases/latest/download/hypermeshmediaplayer.apk)
+   *(Or open the release page: https://github.com/sahaveer/hypermesh-mobile-app/releases/tag/v1.0.0%2B1)*
+2. Tap the downloaded `hypermeshmediaplayer.apk` file on your Android phone.
+3. Allow **"Install unknown apps"** when prompted by Android, then open **Hypermesh Media Player**.
 
 ---
 
-## Quick Start
+## How Hypermesh Works: Mesh Sharing + Optional Personal Server & YouTube Downloader
 
-### Option 1: Install Prebuilt APK (End Users)
-1. Check [GitHub Releases](https://github.com/sahaveer/hypermesh-mobile-app/releases) (or download directly from your running Hypermesh Media Hub at `http://<your-hub-ip>:8000/hypermeshmediaplayer.apk`).
-2. Start a Hub on your PC, old laptop, Raspberry Pi, or spare phone using [`sahaveer/hypermesh-media-hub`](https://github.com/sahaveer/hypermesh-media-hub).
-3. Open **Hypermesh Media Player**, enter your Hub URL (or tap **Localhost / Demo Hub**), and stream!
+1. **Peer-to-Peer Mesh Player (Phone-to-Phone Over Wi-Fi / Hotspot)**
+   - **Share videos and audio across anyone connected to your network** with **0 MB internet data used**.
+   - Every phone running the app can turn on its built-in local mesh server and automatically appear on nearby devices' **Mesh Radar**, pooling everyone's songs and videos into one shared library.
+   - Tap the pin icon on any peer's track or video to save an offline copy on your device.
 
-### Option 2: Build From Source (Developers)
+2. **Add Your Own Personal Server + YouTube (`yt-dlp`) Downloader (Optional)**
+   - Want to keep all your music & movies offline on a dedicated machine **and** download YouTube songs/videos directly into your local server library?
+   - **Copy this server repo to your computer:**
+     ```text
+     https://github.com/sahaveer/hypermesh-media-hub
+     ```
+   - Run it on an **Old PC, Spare Laptop, Raspberry Pi, or spare Android phone (Termux)** to unlock 24/7 offline storage, Smart TV DLNA streaming, and server-side **`yt-dlp` + FFmpeg** downloading.
+
+---
+
+## Step-by-Step: Create Your Own Server, Connect Local Music & Download YouTube
+
+### Step 1: Create Your Server on Any PC, Laptop, or Raspberry Pi
+Paste these commands on your computer (requires Python 3.10+, Node.js 22+ or Deno 2.3+, and FFmpeg):
+```bash
+git clone https://github.com/sahaveer/hypermesh-media-hub.git
+cd hypermesh-media-hub
+pip install -r requirements.txt
+python run_server.py
+```
+*(On Windows, you can also double-click `start_player.bat` or `start_global_player.bat`.)*
+
+### Step 2: Connect Your Local Music & Video Folders
+1. Open the server dashboard in your browser (`http://localhost:8000`).
+2. Go to **Privacy & Folders** and add any folders on your PC/external drive containing your offline Music, Movies, Videos, or Photos.
+3. Your entire library is indexed locally and shared across your network.
+
+### Step 3: Connect the Android App to Your Server
+1. Open **Hypermesh Media Player** on your phone → go to **Hub Settings / Hub Connect**.
+2. Enter your server URL printed in the terminal:
+   - **Same Wi-Fi:** `http://192.168.x.x:8000`
+   - **Tailscale (from anywhere):** `http://100.x.y.z:8000`
+   - **Cloudflare Tunnel (4G/5G):** `https://....trycloudflare.com`
+
+### Step 4: Download YouTube Songs & Videos Later On
+1. In **Hub Settings**, enable **Load GitHub Patch** → **Apply Patch** (activates the Web Media Importer using `/api/download` on your server).
+2. Open the **Downloader** sheet in the app, paste any YouTube / Spotify / media link (or search query), pick **Audio (MP3)** or **Video (MP4)**, and choose **Server** (saves to your offline library for everyone on your mesh) or **Phone** (saves straight to your phone).
+
+---
+
+## Build From Source (Developers)
+
 ```bash
 git clone https://github.com/sahaveer/hypermesh-mobile-app.git
 cd hypermesh-mobile-app
 flutter pub get
-
-# Run tests
 flutter test
-
-# Run on connected Android device / emulator
 flutter run
-
-# Build Android APK
 flutter build apk --release
 ```
-
-See [REQUIREMENTS.md](REQUIREMENTS.md) for Flutter SDK, Android SDK, Java, and host-server requirements, and [CONTRIBUTING.md](CONTRIBUTING.md) for architecture & release signing instructions.
 
 ---
 

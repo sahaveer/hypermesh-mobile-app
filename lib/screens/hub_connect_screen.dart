@@ -347,26 +347,26 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                "Transform your PC, Linux home server, or Raspberry Pi into a dedicated personal media cloud:",
+                "Hypermesh is a Mesh Media Player: phones on the same Wi-Fi share audio & video with each other. To also keep all your music offline and unlock YouTube (yt-dlp) downloading, run your own server on an old PC, laptop, or Raspberry Pi:",
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 13, height: 1.4),
               ),
               const SizedBox(height: 16),
               _buildGuideStep(
                 step: "1",
-                title: "Clone Server from GitHub",
-                desc: "git clone https://github.com/sahaveer/hypermesh-media-hub.git\ncd hypermesh-media-hub && pip install -r requirements.txt\npython run_server.py",
+                title: "Create Your Server From GitHub",
+                desc: "On your computer, clone:\ngit clone https://github.com/sahaveer/hypermesh-media-hub.git\ncd hypermesh-media-hub && pip install -r requirements.txt\npython run_server.py",
               ),
               const SizedBox(height: 12),
               _buildGuideStep(
                 step: "2",
-                title: "Zero-Config Mesh with Tailscale",
-                desc: "Install Tailscale on your server and phone. Your server gets a private 100.x.y.z IP accessible anywhere in the world without port forwarding.",
+                title: "Connect Local Music & Videos",
+                desc: "Open http://localhost:8000 on your server, go to Privacy & Folders, and add your local Music/Video folders so everything stays offline on your network.",
               ),
               const SizedBox(height: 12),
               _buildGuideStep(
                 step: "3",
-                title: "Connect & Ingest Media",
-                desc: "Enter your server URL (e.g. http://100.x.y.z:8000) above. You can queue downloads directly on your server and stream anywhere!",
+                title: "Link App & Download YouTube",
+                desc: "Enter your server URL (Wi-Fi IP, Tailscale 100.x.y.z, or Cloudflare link) above. Enable the Web Media Importer patch to download YouTube songs & videos to your server anytime!",
               ),
             ],
           ),
