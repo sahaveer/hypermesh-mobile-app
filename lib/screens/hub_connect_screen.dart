@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/hypermesh_provider.dart';
 import '../providers/auth_provider.dart';
@@ -17,6 +18,7 @@ class HubConnectScreen extends StatefulWidget {
 }
 
 class _HubConnectScreenState extends State<HubConnectScreen> {
+  static const String _hubRepoUrl = "https://github.com/sahaveer/hypermesh-media-hub";
   late TextEditingController _hostController;
   bool _isTesting = false;
   String? _statusMessage;
@@ -372,6 +374,19 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
           ),
         ),
         actions: [
+          TextButton.icon(
+            onPressed: () {
+              Clipboard.setData(const ClipboardData(text: _hubRepoUrl));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text("Copied Media Hub GitHub link!"),
+                  backgroundColor: AppTheme.cyanAccent,
+                ),
+              );
+            },
+            icon: const Icon(Icons.copy, size: 16, color: AppTheme.cyanAccent),
+            label: const Text("Copy GitHub Link", style: TextStyle(color: AppTheme.cyanAccent)),
+          ),
           ElevatedButton(
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.cyanAccent,
@@ -628,12 +643,99 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
           ),
           const SizedBox(height: 16),
 
-          // Self-Hosted Server Guide Card
-          _PresetTile(
-            title: "Host Your Own Server (GitHub & Tailscale)",
-            subtitle: "Turn your PC or Raspberry Pi into a cloud hub • Tap for guide",
-            icon: Icons.hub,
-            onTap: _showSelfHostGuideDialog,
+          // Self-Hosted Media Hub Server Card
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: [
+                  AppTheme.cyanAccent.withOpacity(0.10),
+                  AppTheme.purpleAccent.withOpacity(0.10),
+                ],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: AppTheme.cyanAccent.withOpacity(0.4)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.hub, color: AppTheme.cyanAccent, size: 22),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        "Want Your Own Personal Media Server?",
+                        style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  "Phones on your network already share audio & video over Mesh. To keep all music offline on an old PC, laptop, or Raspberry Pi and unlock YouTube (yt-dlp) downloading, create your own server from GitHub:",
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
+                ),
+                const SizedBox(height: 10),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: AppTheme.surface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: AppTheme.border),
+                  ),
+                  child: const SelectableText(
+                    _hubRepoUrl,
+                    style: TextStyle(
+                      color: AppTheme.cyanAccent,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.cyanAccent,
+                          side: const BorderSide(color: AppTheme.cyanAccent),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () {
+                          Clipboard.setData(const ClipboardData(text: _hubRepoUrl));
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text("Copied: https://github.com/sahaveer/hypermesh-media-hub"),
+                              backgroundColor: AppTheme.cyanAccent,
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.copy, size: 16),
+                        label: const Text("Copy GitHub Link", style: TextStyle(fontSize: 12)),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.cyanAccent,
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: _showSelfHostGuideDialog,
+                        icon: const Icon(Icons.menu_book, size: 16),
+                        label: const Text("Setup Guide", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 16),
 
@@ -918,7 +1020,7 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
                                     ? "Active v${patchService.activePatch?.version} - Server yt-dlp bridge enabled"
                                     : serverAvailable
                                         ? "Detected on connected personal server - yt-dlp bridge ready"
-                                        : "Connect to your own MediaPlayer server or load a public GitHub patch URL to enable downloading.",
+                                        : "Connect to your own Hypermesh Media Hub server (github.com/sahaveer/hypermesh-media-hub) or load a GitHub patch URL to enable downloading.",
                                 style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
                               ),
                             ],
