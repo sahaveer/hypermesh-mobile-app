@@ -152,5 +152,102 @@ void main() {
       // Dispose dialog timer cleanly
       await tester.pumpWidget(const SizedBox.shrink());
     });
+
+    testWidgets('ServerDownloaderDialog search shows server match without YouTube, or YouTube Download & Play when missing', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      Map<String, dynamic>? lastDownloadBody;
+
+      final client = MockClient((req) async {
+        if (req.url.path == '/api/downloads/status') {
+          return http.Response(json.encode({'tasks': []}), 200);
+        }
+        if (req.url.path == '/api/downloader/search') {
+          final q = req.url.queryParameters['q'] ?? '';
+          if (q.toLowerCase().contains('existing')) {
+            return http.Response(
+              json.encode({
+                'query': q,
+                'in_library': true,
+                'local_matches': [
+                  {
+                    'id': 'srv-1',
+                    'title': 'Existing Server Anthem',
+                    'artist': 'Local Band',
+                    'media_type': 'audio',
+                    'duration': 185,
+                  },
+                ],
+                'youtube_results': [],
+              }),
+              200,
+            );
+          }
+          return http.Response(
+            json.encode({
+              'query': q,
+              'in_library': false,
+              'local_matches': [],
+              'youtube_results': [
+                {
+                  'id': 'yt-99',
+                  'title': 'Brand New Song Official',
+                  'channel': 'MusicChannel',
+                  'duration': 210,
+                  'thumbnail': '',
+                  'url': 'https://www.youtube.com/watch?v=yt-99',
+                },
+              ],
+            }),
+            200,
+          );
+        }
+        if (req.url.path == '/api/download' && req.method == 'POST') {
+          lastDownloadBody = json.decode(req.body) as Map<String, dynamic>;
+          return http.Response(
+            json.encode({'task_id': 't-yt', 'destination': 'server'}),
+            200,
+          );
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final api = ApiService(initialHost: 'http://127.0.0.1:8000', httpClient: client);
+      final provider = HypermeshProvider(apiService: api);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<HypermeshProvider>.value(
+          value: provider,
+          child: const MaterialApp(
+            home: Scaffold(body: ServerDownloaderDialog()),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      // 1. Search song that IS on server -> points to server, no YouTube results
+      await tester.enterText(find.byType(TextField), 'Existing Song');
+      await tester.tap(find.byTooltip('Search Server & YouTube'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('ALREADY ON SERVER (1)'), findsOneWidget);
+      expect(find.text('Existing Server Anthem'), findsOneWidget);
+      expect(find.text('Download & Play'), findsNothing);
+
+      // 2. Search song NOT on server -> shows YouTube Download & Play
+      await tester.enterText(find.byType(TextField), 'Brand New Song');
+      await tester.tap(find.byTooltip('Search Server & YouTube'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('YOUTUBE RESULTS (1)'), findsOneWidget);
+      expect(find.text('Brand New Song Official'), findsOneWidget);
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Download & Play'));
+      await tester.pump();
+
+      expect(lastDownloadBody?['url'], 'https://www.youtube.com/watch?v=yt-99');
+      expect(lastDownloadBody?['destination'], 'server');
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
   });
 }

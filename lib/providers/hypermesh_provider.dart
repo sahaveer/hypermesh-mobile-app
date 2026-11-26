@@ -51,6 +51,7 @@ class HypermeshProvider extends ChangeNotifier {
   }
 
   List<Song> get localSongs => _localSongs;
+  List<VideoItem> get localVideos => _localVideos;
   List<PeerNode> get peerNodes => _peerNodes;
   List<Playlist> get playlists => _playlists;
   Set<String> get favoriteIds => _favoriteIds;

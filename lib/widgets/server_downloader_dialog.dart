@@ -2,8 +2,13 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import '../models/song.dart';
+import '../models/video_item.dart';
 import '../providers/hypermesh_provider.dart';
+import '../providers/player_provider.dart';
+import '../screens/video_player_screen.dart';
 import '../theme/app_theme.dart';
+import 'now_playing_sheet.dart';
 
 class ServerDownloaderDialog extends StatefulWidget {
   const ServerDownloaderDialog({super.key});
@@ -27,13 +32,20 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
   String _selectedQuality = "best"; // "best", "1080p", "720p"
   String _selectedDestination = "server"; // "server" or "client"
   bool _isSubmitting = false;
+  bool _isSearching = false;
   String? _statusFeedback;
   bool _feedbackIsError = false;
   Timer? _pollingTimer;
   List<Map<String, dynamic>> _tasks = [];
 
+  List<Map<String, dynamic>> _localSearchMatches = [];
+  List<Map<String, dynamic>> _youtubeSearchResults = [];
+  bool _hasSearched = false;
+  String _lastSearchQuery = '';
+
   final Set<String> _knownCompletedIds = {};
   final Set<String> _requestedClientTaskIds = {};
+  final Set<String> _autoPlayTaskIds = {};
   final Set<String> _savingTaskIds = {};
   final Set<String> _savedTaskIds = {};
   bool _initialLoadDone = false;
@@ -61,6 +73,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
 
     bool shouldRefreshLibrary = false;
     final tasksToAutoSave = <Map<String, dynamic>>[];
+    final tasksToAutoPlay = <Map<String, dynamic>>[];
 
     for (final task in tasks) {
       final id = task['id']?.toString() ?? '';
@@ -74,6 +87,9 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
           final dest = (task['destination'] as String? ?? 'server').toLowerCase();
           if (dest == 'server') {
             shouldRefreshLibrary = true;
+            if (_autoPlayTaskIds.remove(id)) {
+              tasksToAutoPlay.add(task);
+            }
           } else if (dest == 'client' &&
               (_requestedClientTaskIds.contains(id) || task['owner_id'] == hypermesh.deviceId) &&
               !_savingTaskIds.contains(id) &&
@@ -91,10 +107,92 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
     });
 
     if (shouldRefreshLibrary) {
-      hypermesh.refreshLibrary();
+      await hypermesh.refreshLibrary();
     }
     for (final task in tasksToAutoSave) {
       _saveTaskToPhone(task);
+    }
+    if (tasksToAutoPlay.isNotEmpty && mounted) {
+      await _autoPlayCompletedTask(tasksToAutoPlay.first);
+    }
+  }
+
+  Future<void> _autoPlayCompletedTask(Map<String, dynamic> task) async {
+    final songId = task['song_id']?.toString() ?? '';
+    if (songId.isEmpty || !mounted) return;
+    final hypermesh = context.read<HypermeshProvider>();
+    final item = await hypermesh.apiService.fetchSongById(songId);
+    if (item == null || !mounted) return;
+    await _playServerItem(item);
+  }
+
+  Future<void> _playServerItem(Map<String, dynamic> item) async {
+    if (!mounted) return;
+    final hypermesh = context.read<HypermeshProvider>();
+    final mediaType = (item['media_type']?.toString() ?? 'audio').toLowerCase();
+    final hostUrl = hypermesh.apiService.hostUrl;
+    final id = item['id']?.toString() ?? '';
+    final title = item['title']?.toString() ?? 'Unknown';
+    final duration = (item['duration'] is num) ? (item['duration'] as num).toDouble() : 0.0;
+
+    if (mediaType == 'video') {
+      final video = VideoItem(
+        id: id,
+        title: title,
+        duration: duration,
+        filesize: (item['filesize'] is num) ? (item['filesize'] as num).toInt() : 0,
+        resolution: item['resolution']?.toString() ?? '1080p FHD',
+        ownerId: item['owner_id']?.toString() ?? 'host',
+        ownerName: item['owner_name']?.toString() ?? 'Server',
+        sourceNodeName: item['owner_name']?.toString() ?? 'Server',
+        sourceNodeHost: hostUrl,
+        isPeer: false,
+      );
+      Navigator.of(context).pop();
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => VideoPlayerScreen(video: video, hostUrl: hostUrl),
+        ),
+      );
+      return;
+    }
+
+    PlayerProvider? player;
+    try {
+      player = context.read<PlayerProvider>();
+    } catch (_) {
+      player = null;
+    }
+
+    final song = Song(
+      id: id,
+      title: title,
+      artist: item['artist']?.toString() ?? 'Server',
+      album: item['album']?.toString() ?? '',
+      duration: duration,
+      ownerId: item['owner_id']?.toString() ?? 'host',
+      ownerName: item['owner_name']?.toString() ?? 'Server',
+      sourceNodeName: item['owner_name']?.toString() ?? 'Server',
+      sourceNodeHost: hostUrl,
+      isPeer: false,
+    );
+
+    if (player != null) {
+      await player.playSong(song, [song, ...hypermesh.localSongs]);
+      if (!mounted) return;
+      final nav = Navigator.of(context);
+      nav.pop();
+      showModalBottomSheet(
+        context: nav.context,
+        isScrollControlled: true,
+        backgroundColor: Colors.transparent,
+        builder: (_) => NowPlayingSheet(song: song),
+      );
+    } else {
+      setState(() {
+        _feedbackIsError = false;
+        _statusFeedback = "Ready on server: $title";
+      });
     }
   }
 
@@ -123,10 +221,113 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
     });
   }
 
-  Future<void> _handleStartDownload() async {
-    final url = _urlController.text.trim();
-    if (url.isEmpty) return;
+  List<Map<String, dynamic>> _findInMemoryLibraryMatches(HypermeshProvider hypermesh, String query) {
+    final tokens = query.toLowerCase().split(RegExp(r'\s+')).where((t) => t.isNotEmpty).toList();
+    if (tokens.isEmpty) return [];
 
+    final matches = <Map<String, dynamic>>[];
+    final seenIds = <String>{};
+
+    for (final s in hypermesh.localSongs) {
+      final hay = '${s.title} ${s.artist} ${s.album}'.toLowerCase();
+      if (tokens.every((t) => hay.contains(t)) && seenIds.add(s.id)) {
+        matches.add({
+          'id': s.id,
+          'title': s.title,
+          'artist': s.artist,
+          'album': s.album,
+          'media_type': 'audio',
+          'duration': s.duration,
+          'owner_name': s.sourceNodeName,
+        });
+      }
+    }
+    for (final v in hypermesh.localVideos) {
+      final hay = '${v.title} ${v.resolution}'.toLowerCase();
+      if (tokens.every((t) => hay.contains(t)) && seenIds.add(v.id)) {
+        matches.add({
+          'id': v.id,
+          'title': v.title,
+          'artist': 'Server Video',
+          'album': '',
+          'media_type': 'video',
+          'duration': v.duration,
+          'resolution': v.resolution,
+          'owner_name': v.sourceNodeName,
+        });
+      }
+    }
+    return matches;
+  }
+
+  Future<void> _handleSearch({bool includeYoutube = false}) async {
+    final query = _urlController.text.trim();
+    if (query.isEmpty) return;
+
+    setState(() {
+      _isSearching = true;
+      _statusFeedback = null;
+      _feedbackIsError = false;
+      _lastSearchQuery = query;
+    });
+
+    final hypermesh = context.read<HypermeshProvider>();
+    final inMemoryMatches = _findInMemoryLibraryMatches(hypermesh, query);
+
+    if (inMemoryMatches.isNotEmpty && !includeYoutube) {
+      setState(() {
+        _isSearching = false;
+        _hasSearched = true;
+        _localSearchMatches = inMemoryMatches;
+        _youtubeSearchResults = [];
+      });
+      return;
+    }
+
+    final res = await hypermesh.apiService.searchDownloader(
+      query: query,
+      limit: 8,
+      includeYoutube: includeYoutube,
+      clientId: hypermesh.deviceId,
+    );
+    if (!mounted) return;
+
+    if (res['ok'] == true) {
+      final serverLocal = (res['local_matches'] as List? ?? [])
+          .map((e) => Map<String, dynamic>.from(e as Map))
+          .toList();
+      final mergedLocal = serverLocal.isNotEmpty ? serverLocal : inMemoryMatches;
+      final ytResults = (mergedLocal.isNotEmpty && !includeYoutube)
+          ? <Map<String, dynamic>>[]
+          : (res['youtube_results'] as List? ?? [])
+              .map((e) => Map<String, dynamic>.from(e as Map))
+              .toList();
+
+      setState(() {
+        _isSearching = false;
+        _hasSearched = true;
+        _localSearchMatches = mergedLocal;
+        _youtubeSearchResults = ytResults;
+      });
+    } else {
+      setState(() {
+        _isSearching = false;
+        _hasSearched = true;
+        _localSearchMatches = inMemoryMatches;
+        _youtubeSearchResults = [];
+        _feedbackIsError = true;
+        _statusFeedback = res['error']?.toString() ?? 'Search failed.';
+      });
+    }
+  }
+
+  Future<void> _enqueueUrl(
+    String url, {
+    String? destinationOverride,
+    bool autoPlay = false,
+    bool clearInput = false,
+  }) async {
+    final dest = destinationOverride ?? _selectedDestination;
     setState(() {
       _isSubmitting = true;
       _statusFeedback = null;
@@ -138,7 +339,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
       url: url,
       format: _selectedFormat,
       quality: _selectedFormat == "audio" ? "best" : _selectedQuality,
-      destination: _selectedDestination,
+      destination: dest,
       clientId: hypermesh.deviceId,
       deviceName: hypermesh.deviceName,
     );
@@ -147,18 +348,24 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
 
     final ok = res['ok'] == true;
     final taskId = res['task_id']?.toString();
-    if (ok && taskId != null && _selectedDestination == 'client') {
-      _requestedClientTaskIds.add(taskId);
+    if (ok && taskId != null) {
+      if (dest == 'client') {
+        _requestedClientTaskIds.add(taskId);
+      } else if (autoPlay) {
+        _autoPlayTaskIds.add(taskId);
+      }
     }
 
     setState(() {
       _isSubmitting = false;
       if (ok) {
-        _urlController.clear();
+        if (clearInput) _urlController.clear();
         _feedbackIsError = false;
-        _statusFeedback = _selectedDestination == 'client'
-            ? "Downloading on server — will save to your phone when ready!"
-            : "Download started on your personal server!";
+        _statusFeedback = autoPlay
+            ? "Downloading on server — will play automatically when ready!"
+            : dest == 'client'
+                ? "Downloading on server — will save to your phone when ready!"
+                : "Download started on your personal server!";
       } else {
         _feedbackIsError = true;
         _statusFeedback = res['error']?.toString() ??
@@ -167,6 +374,12 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
     });
 
     await _fetchTasks();
+  }
+
+  Future<void> _handleStartDownload() async {
+    final url = _urlController.text.trim();
+    if (url.isEmpty) return;
+    await _enqueueUrl(url, clearInput: true);
   }
 
   Future<void> _pasteFromClipboard() async {
@@ -178,13 +391,23 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
     }
   }
 
+  String _formatDuration(dynamic sec) {
+    final total = (sec is num) ? sec.toInt() : 0;
+    if (total <= 0) return '';
+    final h = total ~/ 3600;
+    final m = (total % 3600) ~/ 60;
+    final s = total % 60;
+    if (h > 0) return '$h:${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+    return '$m:${s.toString().padLeft(2, '0')}';
+  }
+
   @override
   Widget build(BuildContext context) {
     final bottomInset = MediaQuery.of(context).viewInsets.bottom;
 
     return Container(
       constraints: BoxConstraints(
-        maxHeight: MediaQuery.of(context).size.height * 0.88,
+        maxHeight: MediaQuery.of(context).size.height * 0.9,
       ),
       margin: EdgeInsets.only(bottom: bottomInset),
       padding: const EdgeInsets.all(20),
@@ -217,7 +440,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                       style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, letterSpacing: 1.1),
                     ),
                     Text(
-                      "yt-dlp personal server bridge",
+                      "Search server library first, then YouTube",
                       style: TextStyle(fontSize: 12, color: AppTheme.textSecondary),
                     ),
                   ],
@@ -231,25 +454,50 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
           ),
           const SizedBox(height: 14),
 
-          // URL / Search Input
+          // Search & URL Input Bar
           TextField(
             controller: _urlController,
             style: const TextStyle(color: Colors.white, fontSize: 14),
+            textInputAction: TextInputAction.search,
+            onSubmitted: (val) {
+              final clean = val.trim();
+              if (clean.startsWith('http://') || clean.startsWith('https://')) {
+                _handleStartDownload();
+              } else {
+                _handleSearch();
+              }
+            },
             decoration: InputDecoration(
-              hintText: "Paste YouTube, Spotify link or song name...",
+              hintText: "Search song/video or paste YouTube/Spotify link...",
               hintStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
               filled: true,
               fillColor: AppTheme.surfaceLight,
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(14), borderSide: BorderSide.none),
-              prefixIcon: const Icon(Icons.link, color: AppTheme.cyanAccent, size: 20),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.content_paste, color: AppTheme.textSecondary, size: 20),
-                tooltip: "Paste from Clipboard",
-                onPressed: _pasteFromClipboard,
+              prefixIcon: const Icon(Icons.search, color: AppTheme.cyanAccent, size: 20),
+              suffixIcon: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: _isSearching
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.cyanAccent),
+                          )
+                        : const Icon(Icons.youtube_searched_for, color: AppTheme.cyanAccent, size: 20),
+                    tooltip: "Search Server & YouTube",
+                    onPressed: _isSearching ? null : () => _handleSearch(),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.content_paste, color: AppTheme.textSecondary, size: 20),
+                    tooltip: "Paste from Clipboard",
+                    onPressed: _pasteFromClipboard,
+                  ),
+                ],
               ),
             ),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
 
           // Format Selectors (Audio vs Video)
           Row(
@@ -319,7 +567,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
               ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 10),
 
           // Start Download Button
           SizedBox(
@@ -328,7 +576,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppTheme.cyanAccent,
                 foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(vertical: 14),
+                padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
               ),
               onPressed: _isSubmitting ? null : _handleStartDownload,
@@ -345,7 +593,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
           ),
 
           if (_statusFeedback != null) ...[
-            const SizedBox(height: 10),
+            const SizedBox(height: 8),
             Text(
               _statusFeedback!,
               style: TextStyle(
@@ -355,168 +603,379 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
             ),
           ],
 
-          const SizedBox(height: 16),
+          const SizedBox(height: 10),
           const Divider(color: AppTheme.border),
-          const SizedBox(height: 6),
 
-          // Server Active Tasks Section
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text(
-                "SERVER DOWNLOAD QUEUE (${_tasks.length})",
-                style: const TextStyle(
-                  color: AppTheme.textSecondary,
-                  fontSize: 11,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.2,
-                ),
-              ),
-              if (_tasks.isNotEmpty)
-                TextButton(
-                  onPressed: () async {
-                    final hypermesh = context.read<HypermeshProvider>();
-                    await hypermesh.apiService.clearDownloadHistory();
-                    _fetchTasks();
-                  },
-                  child: const Text("Clear Finished", style: TextStyle(color: AppTheme.cyanAccent, fontSize: 12)),
-                ),
-            ],
-          ),
-          const SizedBox(height: 6),
-
-          // Tasks List
+          // Scrollable Search Results + Server Queue
           Expanded(
-            child: _tasks.isEmpty
-                ? const Center(
-                    child: Text(
-                      "No active downloads on server.",
-                      style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
-                    ),
-                  )
-                : ListView.builder(
-                    itemCount: _tasks.length,
-                    itemBuilder: (ctx, idx) {
-                      final task = _tasks[idx];
-                      final taskId = task['id']?.toString() ?? '';
-                      final title = task['title'] as String? ?? task['url'] as String? ?? "Unknown Media";
-                      final status = (task['status'] as String? ?? "pending").toLowerCase();
-                      final progress = (task['progress'] as num?)?.toDouble() ?? 0.0;
-                      final dest = (task['destination'] as String? ?? 'server').toLowerCase();
-                      final errorMsg = (task['error'] as String?)?.trim();
-                      final isFinished = status == "finished" || status == "completed";
-                      final isError = status == "error" || status == "failed";
-                      final isSaving = _savingTaskIds.contains(taskId);
-                      final isSaved = _savedTaskIds.contains(taskId);
-
-                      return Container(
-                        margin: const EdgeInsets.only(bottom: 8),
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: AppTheme.surfaceLight,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: isError ? Colors.redAccent.withOpacity(0.5) : AppTheme.border),
+            child: ListView(
+              children: [
+                if (_hasSearched) ...[
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Flexible(
+                        child: Text(
+                          _localSearchMatches.isNotEmpty && _youtubeSearchResults.isEmpty
+                              ? "ALREADY ON SERVER (${_localSearchMatches.length})"
+                              : "YOUTUBE RESULTS (${_youtubeSearchResults.length})",
+                          style: TextStyle(
+                            color: _localSearchMatches.isNotEmpty && _youtubeSearchResults.isEmpty
+                                ? AppTheme.emeraldAccent
+                                : AppTheme.cyanAccent,
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.1,
+                          ),
                         ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Row(
+                      ),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (_localSearchMatches.isNotEmpty && _youtubeSearchResults.isEmpty)
+                            TextButton(
+                              onPressed: _isSearching ? null : () => _handleSearch(includeYoutube: true),
+                              child: const Text("Search YouTube", style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                            ),
+                          TextButton(
+                            onPressed: () => setState(() {
+                              _hasSearched = false;
+                              _localSearchMatches = [];
+                              _youtubeSearchResults = [];
+                            }),
+                            child: const Text("Clear", style: TextStyle(fontSize: 11, color: AppTheme.textSecondary)),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                  if (_localSearchMatches.isEmpty && _youtubeSearchResults.isEmpty && !_isSearching)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        "No results found for '$_lastSearchQuery'.",
+                        style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                      ),
+                    ),
+                  ..._localSearchMatches.map((item) {
+                    final dur = _formatDuration(item['duration']);
+                    final isVideo = (item['media_type']?.toString() ?? 'audio') == 'video';
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.emeraldAccent.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.emeraldAccent.withOpacity(0.4)),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(isVideo ? Icons.movie : Icons.music_note, color: AppTheme.emeraldAccent, size: 22),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Icon(
-                                  isFinished
-                                      ? Icons.check_circle
-                                      : isError
-                                          ? Icons.error
-                                          : Icons.downloading,
-                                  color: isFinished
-                                      ? AppTheme.emeraldAccent
-                                      : isError
-                                          ? Colors.redAccent
-                                          : AppTheme.cyanAccent,
-                                  size: 18,
-                                ),
-                                const SizedBox(width: 8),
-                                Expanded(
-                                  child: Text(
-                                    title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
                                 Text(
-                                  isError
-                                      ? "Failed"
-                                      : isFinished
-                                          ? "100%"
-                                          : "${progress.toInt()}%",
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.bold,
-                                    color: isError
-                                        ? Colors.redAccent
-                                        : isFinished
-                                            ? AppTheme.emeraldAccent
-                                            : AppTheme.cyanAccent,
-                                  ),
+                                  item['title']?.toString() ?? 'Unknown',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
+                                ),
+                                Text(
+                                  "${item['artist'] ?? 'Server'}${dur.isNotEmpty ? ' • $dur' : ''} • Ready on Server",
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 11, color: AppTheme.emeraldAccent),
                                 ),
                               ],
                             ),
-                            const SizedBox(height: 6),
-                            LinearProgressIndicator(
-                              value: isFinished ? 1.0 : (progress / 100.0).clamp(0.0, 1.0),
-                              backgroundColor: Colors.white10,
-                              color: isFinished
-                                  ? AppTheme.emeraldAccent
-                                  : isError
-                                      ? Colors.redAccent
-                                      : AppTheme.cyanAccent,
-                              minHeight: 4,
+                          ),
+                          ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: AppTheme.emeraldAccent,
+                              foregroundColor: Colors.black,
+                              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                              minimumSize: Size.zero,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
                             ),
-                            if (isError && errorMsg != null && errorMsg.isNotEmpty) ...[
-                              const SizedBox(height: 6),
-                              Text(
-                                errorMsg,
-                                style: const TextStyle(color: Colors.redAccent, fontSize: 11),
-                              ),
-                            ],
-                            if (isFinished && dest == 'client') ...[
-                              const SizedBox(height: 8),
-                              Align(
-                                alignment: Alignment.centerRight,
-                                child: TextButton.icon(
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: isSaved ? AppTheme.emeraldAccent : AppTheme.cyanAccent,
-                                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                    minimumSize: Size.zero,
-                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            onPressed: () => _playServerItem(item),
+                            icon: const Icon(Icons.play_arrow, size: 16),
+                            label: const Text("Play", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  ..._youtubeSearchResults.map((yt) {
+                    final dur = _formatDuration(yt['duration']);
+                    final thumb = yt['thumbnail']?.toString();
+                    final ytUrl = yt['url']?.toString() ?? '';
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceLight,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: AppTheme.border),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              if (thumb != null && thumb.isNotEmpty) ...[
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(8),
+                                  child: Image.network(
+                                    thumb,
+                                    width: 72,
+                                    height: 46,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, _, _) => const Icon(Icons.ondemand_video, color: AppTheme.cyanAccent),
                                   ),
-                                  onPressed: (isSaving || isSaved) ? null : () => _saveTaskToPhone(task),
-                                  icon: Icon(
-                                    isSaved
-                                        ? Icons.offline_pin
-                                        : isSaving
-                                            ? Icons.hourglass_top
-                                            : Icons.download_done,
-                                    size: 16,
-                                  ),
-                                  label: Text(
-                                    isSaved
-                                        ? "Saved on Phone"
-                                        : isSaving
-                                            ? "Saving to Phone..."
-                                            : "Save to Phone",
-                                    style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                              ],
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      yt['title']?.toString() ?? 'YouTube Video',
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13, color: Colors.white),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      "${yt['channel'] ?? 'YouTube'}${dur.isNotEmpty ? ' • $dur' : ''}",
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  foregroundColor: AppTheme.cyanAccent,
+                                  side: const BorderSide(color: AppTheme.cyanAccent),
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  minimumSize: Size.zero,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                onPressed: _isSubmitting || ytUrl.isEmpty
+                                    ? null
+                                    : () => _enqueueUrl(ytUrl),
+                                icon: const Icon(Icons.download, size: 15),
+                                label: const Text("Download", style: TextStyle(fontSize: 11)),
+                              ),
+                              const SizedBox(width: 8),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppTheme.cyanAccent,
+                                  foregroundColor: Colors.black,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                  minimumSize: Size.zero,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                                ),
+                                onPressed: _isSubmitting || ytUrl.isEmpty
+                                    ? null
+                                    : () => _enqueueUrl(ytUrl, destinationOverride: 'server', autoPlay: true),
+                                icon: const Icon(Icons.play_arrow, size: 16),
+                                label: const Text("Download & Play", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  }),
+                  const Divider(color: AppTheme.border),
+                ],
+
+                // Server Active Tasks Section
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      "SERVER DOWNLOAD QUEUE (${_tasks.length})",
+                      style: const TextStyle(
+                        color: AppTheme.textSecondary,
+                        fontSize: 11,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                      ),
+                    ),
+                    if (_tasks.isNotEmpty)
+                      TextButton(
+                        onPressed: () async {
+                          final hypermesh = context.read<HypermeshProvider>();
+                          await hypermesh.apiService.clearDownloadHistory();
+                          _fetchTasks();
+                        },
+                        child: const Text("Clear Finished", style: TextStyle(color: AppTheme.cyanAccent, fontSize: 12)),
+                      ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (_tasks.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Center(
+                      child: Text(
+                        "No active downloads on server.",
+                        style: TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                      ),
+                    ),
+                  )
+                else
+                  ..._tasks.map((task) {
+                    final taskId = task['id']?.toString() ?? '';
+                    final title = task['title'] as String? ?? task['url'] as String? ?? "Unknown Media";
+                    final status = (task['status'] as String? ?? "pending").toLowerCase();
+                    final progress = (task['progress'] as num?)?.toDouble() ?? 0.0;
+                    final dest = (task['destination'] as String? ?? 'server').toLowerCase();
+                    final errorMsg = (task['error'] as String?)?.trim();
+                    final songId = task['song_id']?.toString() ?? '';
+                    final isFinished = status == "finished" || status == "completed";
+                    final isError = status == "error" || status == "failed";
+                    final isSaving = _savingTaskIds.contains(taskId);
+                    final isSaved = _savedTaskIds.contains(taskId);
+
+                    return Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.surfaceLight,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: isError ? Colors.redAccent.withOpacity(0.5) : AppTheme.border),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                isFinished
+                                    ? Icons.check_circle
+                                    : isError
+                                        ? Icons.error
+                                        : Icons.downloading,
+                                color: isFinished
+                                    ? AppTheme.emeraldAccent
+                                    : isError
+                                        ? Colors.redAccent
+                                        : AppTheme.cyanAccent,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  title,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                isError
+                                    ? "Failed"
+                                    : isFinished
+                                        ? "100%"
+                                        : "${progress.toInt()}%",
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.bold,
+                                  color: isError
+                                      ? Colors.redAccent
+                                      : isFinished
+                                          ? AppTheme.emeraldAccent
+                                          : AppTheme.cyanAccent,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 6),
+                          LinearProgressIndicator(
+                            value: isFinished ? 1.0 : (progress / 100.0).clamp(0.0, 1.0),
+                            backgroundColor: Colors.white10,
+                            color: isFinished
+                                ? AppTheme.emeraldAccent
+                                : isError
+                                    ? Colors.redAccent
+                                    : AppTheme.cyanAccent,
+                            minHeight: 4,
+                          ),
+                          if (isError && errorMsg != null && errorMsg.isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              errorMsg,
+                              style: const TextStyle(color: Colors.redAccent, fontSize: 11),
+                            ),
                           ],
-                        ),
-                      );
-                    },
-                  ),
+                          if (isFinished && dest == 'server' && songId.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton.icon(
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppTheme.emeraldAccent,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                onPressed: () => _autoPlayCompletedTask(task),
+                                icon: const Icon(Icons.play_arrow, size: 16),
+                                label: const Text("Play from Server", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                              ),
+                            ),
+                          ],
+                          if (isFinished && dest == 'client') ...[
+                            const SizedBox(height: 8),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: TextButton.icon(
+                                style: TextButton.styleFrom(
+                                  foregroundColor: isSaved ? AppTheme.emeraldAccent : AppTheme.cyanAccent,
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  minimumSize: Size.zero,
+                                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                onPressed: (isSaving || isSaved) ? null : () => _saveTaskToPhone(task),
+                                icon: Icon(
+                                  isSaved
+                                      ? Icons.offline_pin
+                                      : isSaving
+                                          ? Icons.hourglass_top
+                                          : Icons.download_done,
+                                  size: 16,
+                                ),
+                                label: Text(
+                                  isSaved
+                                      ? "Saved on Phone"
+                                      : isSaving
+                                          ? "Saving to Phone..."
+                                          : "Save to Phone",
+                                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    );
+                  }),
+              ],
+            ),
           ),
         ],
       ),

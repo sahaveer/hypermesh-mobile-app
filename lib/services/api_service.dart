@@ -418,4 +418,55 @@ class ApiService {
       return false;
     }
   }
+
+  Future<Map<String, dynamic>> searchDownloader({
+    required String query,
+    int limit = 8,
+    bool includeYoutube = false,
+    String? clientId,
+  }) async {
+    if (isDemo) {
+      return {'ok': false, 'error': 'Connect to your personal server first.'};
+    }
+
+    try {
+      final params = <String, String>{
+        'q': query.trim(),
+        'limit': limit.toString(),
+        'include_youtube': includeYoutube ? 'true' : 'false',
+      };
+      if (clientId != null && clientId.isNotEmpty) {
+        params['client_id'] = clientId;
+      }
+      final uri = Uri.parse("$hostUrl/api/downloader/search").replace(queryParameters: params);
+      final response = await _get(uri).timeout(const Duration(seconds: 25));
+      if (response.statusCode == 200) {
+        final decoded = Map<String, dynamic>.from(json.decode(response.body) as Map);
+        decoded['ok'] = true;
+        return decoded;
+      }
+      String errorMessage = 'Server returned HTTP ${response.statusCode}';
+      try {
+        final decoded = json.decode(response.body);
+        if (decoded is Map && decoded['detail'] != null) {
+          errorMessage = decoded['detail'].toString();
+        }
+      } catch (_) {}
+      return {'ok': false, 'error': errorMessage};
+    } catch (_) {
+      return {'ok': false, 'error': 'Could not search on server ($hostUrl).'};
+    }
+  }
+
+  Future<Map<String, dynamic>?> fetchSongById(String songId) async {
+    if (isDemo) return null;
+    try {
+      final uri = Uri.parse("$hostUrl/api/song/${Uri.encodeComponent(songId)}");
+      final response = await _get(uri).timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        return Map<String, dynamic>.from(json.decode(response.body) as Map);
+      }
+    } catch (_) {}
+    return null;
+  }
 }

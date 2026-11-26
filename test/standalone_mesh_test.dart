@@ -7,6 +7,7 @@ import 'package:hypermesh_player/services/local_media_store.dart';
 import 'package:hypermesh_player/services/api_service.dart';
 import 'package:hypermesh_player/services/local_mesh_server.dart';
 import 'package:hypermesh_player/services/app_update_service.dart';
+import 'package:hypermesh_player/config/app_config.dart';
 import 'package:hypermesh_player/services/local_mesh_discovery.dart';
 import 'package:hypermesh_player/providers/hypermesh_provider.dart';
 import 'package:hypermesh_player/models/peer_node.dart';
@@ -99,15 +100,15 @@ void main() {
           id: 'peer-new',
           name: 'Alex (New Node)',
           host: '192.168.1.50',
-          appVersion: '1.0.2',
-          buildNumber: 3,
+          appVersion: '9.9.9',
+          buildNumber: AppConfig.buildNumber + 2,
         ),
       ];
 
       final update = AppUpdateService.checkPeerUpdates(peers);
       expect(update, isNotNull);
-      expect(update!.version, '1.0.2');
-      expect(update.buildNumber, 3);
+      expect(update!.version, '9.9.9');
+      expect(update.buildNumber, AppConfig.buildNumber + 2);
       expect(update.isPeerUpdate, true);
       expect(update.sourceName, 'Alex (New Node)');
     });
