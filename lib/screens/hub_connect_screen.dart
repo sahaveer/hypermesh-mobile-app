@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import '../providers/hypermesh_provider.dart';
 import '../providers/auth_provider.dart';
 import '../services/extension_patch_service.dart';
@@ -968,6 +969,18 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
           ],
           const SizedBox(height: 24),
           const Text(
+            "SHARE THIS APP",
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+          _buildShareAppCard(context),
+          const SizedBox(height: 24),
+          const Text(
             "COMMUNITY EXTENSIONS & GITHUB PATCHES",
             style: TextStyle(
               color: AppTheme.textSecondary,
@@ -1093,6 +1106,80 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
                 ),
               );
             },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildShareAppCard(BuildContext context) {
+    const url = AppConfig.shareAppUrl;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppTheme.border),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: QrImageView(
+              data: url,
+              version: QrVersions.auto,
+              size: 112,
+              backgroundColor: Colors.white,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  "Share Hypermesh Player",
+                  style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white),
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  "Let friends scan this QR to grab the app from GitHub.",
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.35),
+                ),
+                const SizedBox(height: 10),
+                SelectableText(
+                  url,
+                  maxLines: 2,
+                  style: const TextStyle(color: AppTheme.cyanAccent, fontSize: 11, fontWeight: FontWeight.w600),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.cyanAccent,
+                    side: const BorderSide(color: AppTheme.cyanAccent),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                  ),
+                  icon: const Icon(Icons.copy, size: 14),
+                  label: const Text("Copy link", style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600)),
+                  onPressed: () {
+                    Clipboard.setData(const ClipboardData(text: url));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text("GitHub link copied"),
+                        backgroundColor: AppTheme.cyanAccent,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+              ],
+            ),
           ),
         ],
       ),
