@@ -172,8 +172,8 @@ class LocalMeshServer {
       'host': _localIp,
       'port': _port,
       'url': serverUrl,
-      'music_count': mediaStore.sharedSongs.length,
-      'video_count': mediaStore.sharedVideos.length,
+      'music_count': mediaStore.meshSongs.length,
+      'video_count': mediaStore.meshVideos.length,
       'is_online': true,
       'app_version': AppConfig.appVersion,
       'build_number': AppConfig.buildNumber,
@@ -227,7 +227,7 @@ class LocalMeshServer {
   }
 
   Future<void> _handleSongs(HttpRequest request) async {
-    final songsList = mediaStore.sharedSongs.map((f) {
+    final songsList = mediaStore.meshSongs.map((f) {
       return {
         'id': f.id,
         'title': LocalMediaStore.cleanTitle(f.name),
@@ -249,7 +249,7 @@ class LocalMeshServer {
   }
 
   Future<void> _handleVideos(HttpRequest request) async {
-    final videosList = mediaStore.sharedVideos.map((f) {
+    final videosList = mediaStore.meshVideos.map((f) {
       return {
         'id': f.id,
         'title': LocalMediaStore.cleanTitle(f.name),
@@ -272,7 +272,7 @@ class LocalMeshServer {
   /// High-performance HTTP 206 Byte-Range streaming for smooth seeking in videos and audio
   Future<void> _handleStream(HttpRequest request, String id) async {
     final item = mediaStore.getFileById(id);
-    if (item == null) {
+    if (item == null || !item.sharedWithMesh) {
       request.response.statusCode = HttpStatus.notFound;
       request.response.write(json.encode({'error': 'Media not found'}));
       await request.response.close();
@@ -348,7 +348,7 @@ class LocalMeshServer {
   /// Download endpoint for 1-tap peer pinning
   Future<void> _handleDownload(HttpRequest request, String id) async {
     final item = mediaStore.getFileById(id);
-    if (item == null) {
+    if (item == null || !item.sharedWithMesh) {
       request.response.statusCode = HttpStatus.notFound;
       await request.response.close();
       return;

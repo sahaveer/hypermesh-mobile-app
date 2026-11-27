@@ -67,6 +67,34 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
     });
   }
 
+  void _handleScanDevice() async {
+    final hypermesh = context.read<HypermeshProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+    messenger.showSnackBar(
+      const SnackBar(
+        content: Text("Scanning your device for audio & video…"),
+        duration: Duration(seconds: 1),
+      ),
+    );
+    final result = await hypermesh.scanDeviceMedia();
+    if (!mounted) return;
+    final String text;
+    Color bg = AppTheme.emeraldAccent;
+    if (!result.permissionGranted) {
+      text = "Media permission denied. Allow Audio & Video access in system Settings.";
+      bg = Colors.redAccent;
+    } else if (result.error != null) {
+      text = result.error!;
+      bg = Colors.orangeAccent;
+    } else if (result.added == 0) {
+      text = "No new media found. Toggle sharing per item in the Music/Videos lists.";
+      bg = AppTheme.cyanAccent;
+    } else {
+      text = "Added ${result.added} new items (shown in Music/Videos). Each stays private until you tap its menu → Share with Mesh.";
+    }
+    messenger.showSnackBar(SnackBar(content: Text(text), backgroundColor: bg));
+  }
+
   void _handleCheckUpdates() async {
     final hypermesh = context.read<HypermeshProvider>();
     final messenger = ScaffoldMessenger.of(context);
@@ -829,6 +857,23 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
           ),
           const SizedBox(height: 24),
           const Text(
+            "LOCAL LIBRARY",
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+          _PresetTile(
+            title: "Scan This Device for Media",
+            subtitle: "Finds all audio & video in common folders (Music, Movies, Download, DCIM, WhatsApp…). New items are added hidden from the mesh by default — toggle sharing per file.",
+            icon: Icons.folder_special_outlined,
+            onTap: _handleScanDevice,
+          ),
+          const SizedBox(height: 24),
+          const Text(
             "APP UPDATES & VERSION",
             style: TextStyle(
               color: AppTheme.textSecondary,
@@ -840,10 +885,27 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
           const SizedBox(height: 12),
           _PresetTile(
             title: "Check for Updates",
-            subtitle: "Current: v${AppConfig.appVersion} (Build ${AppConfig.buildNumber})",
+            subtitle: "Current: v${AppConfig.appVersion} (Build ${AppConfig.buildNumber}). Checks GitHub Releases, your personal server, then paired peers.",
             icon: Icons.system_update_alt,
             onTap: _handleCheckUpdates,
           ),
+          if (hypermesh.availableUpdate != null) ...[
+            const SizedBox(height: 10),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppTheme.emeraldAccent,
+                  foregroundColor: Colors.black,
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                ),
+                icon: const Icon(Icons.download),
+                label: Text("Install v${hypermesh.availableUpdate!.version} now"),
+                onPressed: () => AppUpdateDialog.show(context, hypermesh.availableUpdate!),
+              ),
+            ),
+          ],
           const SizedBox(height: 24),
           const Text(
             "SERVER ADMIN & CONTENT MODERATION",

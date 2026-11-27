@@ -13,6 +13,7 @@ import '../services/local_mesh_discovery.dart';
 import '../services/background_mesh_service.dart';
 import '../widgets/background_sharing_dialog.dart';
 import '../services/app_update_service.dart';
+import '../config/app_config.dart';
 
 enum MeshFilter { all, mine, peers, favorites }
 
@@ -240,8 +241,8 @@ class HypermeshProvider extends ChangeNotifier {
       deviceId: _deviceId,
       deviceName: _deviceName,
       serverPort: _localMeshServer!.port,
-      musicCount: localMediaStore.sharedSongs.length,
-      videoCount: localMediaStore.sharedVideos.length,
+      musicCount: localMediaStore.meshSongs.length,
+      videoCount: localMediaStore.meshVideos.length,
       onPeersChanged: (discovered) {
         _onDiscoveredPeersChanged(discovered);
       },
@@ -319,8 +320,8 @@ class HypermeshProvider extends ChangeNotifier {
     final res = await localMediaStore.pickAndAddFolder();
     if (res.folderPath != null) {
       _localMeshDiscovery?.updateMediaCounts(
-        music: localMediaStore.sharedSongs.length,
-        video: localMediaStore.sharedVideos.length,
+        music: localMediaStore.meshSongs.length,
+        video: localMediaStore.meshVideos.length,
       );
       await refreshLibrary();
       _updateBackgroundNotification();
@@ -331,8 +332,8 @@ class HypermeshProvider extends ChangeNotifier {
   Future<int> rescanLocalFolders() async {
     final added = await localMediaStore.rescanAllFolders();
     _localMeshDiscovery?.updateMediaCounts(
-      music: localMediaStore.sharedSongs.length,
-      video: localMediaStore.sharedVideos.length,
+      music: localMediaStore.meshSongs.length,
+      video: localMediaStore.meshVideos.length,
     );
     await refreshLibrary();
     _updateBackgroundNotification();
@@ -342,8 +343,8 @@ class HypermeshProvider extends ChangeNotifier {
   Future<void> removeLocalFolder(String folderPath) async {
     await localMediaStore.removeFolder(folderPath);
     _localMeshDiscovery?.updateMediaCounts(
-      music: localMediaStore.sharedSongs.length,
-      video: localMediaStore.sharedVideos.length,
+      music: localMediaStore.meshSongs.length,
+      video: localMediaStore.meshVideos.length,
     );
     await refreshLibrary();
     _updateBackgroundNotification();
@@ -469,8 +470,8 @@ class HypermeshProvider extends ChangeNotifier {
     final added = await localMediaStore.pickAndAddFiles(isVideo: isVideo);
     if (added.isNotEmpty) {
       _localMeshDiscovery?.updateMediaCounts(
-        music: localMediaStore.sharedSongs.length,
-        video: localMediaStore.sharedVideos.length,
+        music: localMediaStore.meshSongs.length,
+        video: localMediaStore.meshVideos.length,
       );
       await refreshLibrary();
       _updateBackgroundNotification();
@@ -480,12 +481,48 @@ class HypermeshProvider extends ChangeNotifier {
 
   Future<void> removeSharedFile(String id) async {
     await localMediaStore.removeFile(id);
-    _localMeshDiscovery?.updateMediaCounts(
-      music: localMediaStore.sharedSongs.length,
-      video: localMediaStore.sharedVideos.length,
-    );
+    _refreshLocalMediaCounts();
     await refreshLibrary();
     _updateBackgroundNotification();
+  }
+
+  void _refreshLocalMediaCounts() {
+    _localMeshDiscovery?.updateMediaCounts(
+      music: localMediaStore.meshSongs.length,
+      video: localMediaStore.meshVideos.length,
+    );
+  }
+
+  bool isFileSharedWithMesh(String id) {
+    final file = localMediaStore.getFileById(id);
+    return file?.sharedWithMesh ?? false;
+  }
+
+  Future<void> toggleFileSharedWithMesh(String id) async {
+    final file = localMediaStore.getFileById(id);
+    if (file == null) return;
+    await localMediaStore.setFileSharedWithMesh(id, !file.sharedWithMesh);
+    _refreshLocalMediaCounts();
+    _updateBackgroundNotification();
+    notifyListeners();
+  }
+
+  Future<bool> deleteLocalFile(String id) async {
+    final ok = await localMediaStore.deleteLocalFile(id);
+    _refreshLocalMediaCounts();
+    await refreshLibrary();
+    _updateBackgroundNotification();
+    return ok;
+  }
+
+  Future<({int added, bool permissionGranted, String? error})> scanDeviceMedia() async {
+    final result = await localMediaStore.scanDeviceMedia();
+    if (result.added > 0) {
+      _refreshLocalMediaCounts();
+      await refreshLibrary();
+      _updateBackgroundNotification();
+    }
+    return result;
   }
 
   // --- PINNING (COPYING PEER MEDIA TO LOCAL STORAGE) ---
@@ -547,8 +584,8 @@ class HypermeshProvider extends ChangeNotifier {
 
     if (savedPath != null) {
       _localMeshDiscovery?.updateMediaCounts(
-        music: localMediaStore.sharedSongs.length,
-        video: localMediaStore.sharedVideos.length,
+        music: localMediaStore.meshSongs.length,
+        video: localMediaStore.meshVideos.length,
       );
       await refreshLibrary();
       return true;
@@ -597,12 +634,14 @@ class HypermeshProvider extends ChangeNotifier {
       if (generation != _refreshGeneration) return;
       _updateBackgroundNotification();
 
-      // 4. Check for updates (Option B: Server OTA always; Option C: Peer Mesh only if user opted in)
+      // 4. Check for updates: GitHub release first, then server OTA, then
+      //    peer mesh (only when the user has opted in). Demo mode skips all.
       final allowPeer = await AppUpdateService.peerUpdatesAllowed();
       final update = apiService.isDemo
           ? null
-          : AppUpdateService.checkPeerUpdates(_peerNodes, allowPeerUpdates: allowPeer) ??
-              await AppUpdateService.checkServerUpdate(apiService.hostUrl);
+          : await AppUpdateService.checkGithubRelease(AppConfig.githubReleaseRepo) ??
+              await AppUpdateService.checkServerUpdate(apiService.hostUrl) ??
+              AppUpdateService.checkPeerUpdates(_peerNodes, allowPeerUpdates: allowPeer);
       if (generation == _refreshGeneration) _availableUpdate = update;
     } catch (_) {}
 
@@ -612,6 +651,13 @@ class HypermeshProvider extends ChangeNotifier {
   }
 
   Future<UpdateInfo?> checkForUpdates() async {
+    final githubUp = await AppUpdateService.checkGithubRelease(AppConfig.githubReleaseRepo);
+    if (githubUp != null) {
+      _availableUpdate = githubUp;
+      notifyListeners();
+      return githubUp;
+    }
+
     final serverUp = await AppUpdateService.checkServerUpdate(apiService.hostUrl);
     if (serverUp != null) {
       _availableUpdate = serverUp;

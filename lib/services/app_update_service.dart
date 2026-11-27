@@ -85,6 +85,63 @@ class AppUpdateService {
     return null;
   }
 
+  /// Checks the configured GitHub repo's /releases/latest for a newer APK build.
+  /// Tag is expected to look like "v1.0.3+4"; the +N suffix is treated as the
+  /// build number and compared against AppConfig.buildNumber.
+  static Future<UpdateInfo?> checkGithubRelease(String repo) async {
+    try {
+      final clean = repo.trim();
+      if (clean.isEmpty || !clean.contains('/')) return null;
+      final uri = Uri.parse("https://api.github.com/repos/$clean/releases/latest");
+      final response = await http
+          .get(uri, headers: {'Accept': 'application/vnd.github+json'})
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return null;
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final tagName = data['tag_name']?.toString() ?? '';
+      final body = data['body']?.toString() ?? 'Latest release from GitHub.';
+      final (parsedVersion, parsedBuild) = _parseVersionTag(tagName);
+      if (parsedBuild <= AppConfig.buildNumber) return null;
+
+      final assets = (data['assets'] as List? ?? []);
+      String? apkUrl;
+      for (final asset in assets) {
+        final name = asset['name']?.toString() ?? '';
+        if (name.toLowerCase().endsWith('.apk')) {
+          apkUrl = asset['browser_download_url']?.toString();
+          break;
+        }
+      }
+      if (apkUrl == null || apkUrl.isEmpty) return null;
+
+      return UpdateInfo(
+        version: parsedVersion,
+        buildNumber: parsedBuild,
+        apkUrl: apkUrl,
+        releaseNotes: body,
+        isPeerUpdate: false,
+        sourceName: "GitHub",
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static (String, int) _parseVersionTag(String tag) {
+    // Accepts "v1.0.3+4", "1.0.3+4", or plain "1.0.3". Missing build defaults to 0.
+    var text = tag.trim();
+    if (text.startsWith('v') || text.startsWith('V')) text = text.substring(1);
+    final plusIdx = text.indexOf('+');
+    if (plusIdx == -1) {
+      return (text.isEmpty ? '0.0.0' : text, 0);
+    }
+    final version = text.substring(0, plusIdx);
+    final buildStr = text.substring(plusIdx + 1);
+    final build = int.tryParse(buildStr) ?? 0;
+    return (version.isEmpty ? '0.0.0' : version, build);
+  }
+
   /// Checks for remote server updates (Option B - Online OTA Update)
   static Future<UpdateInfo?> checkServerUpdate(String hostUrl) async {
     try {
