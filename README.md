@@ -1,6 +1,6 @@
 # Hypermesh Media Player (Open-Source Mesh Player & Mobile Client)
 
-[![Download Android APK](https://img.shields.io/badge/Download_APK-v1.0.0%2B1-00E5FF?style=for-the-badge&logo=android&logoColor=black)](https://github.com/sahaveer/hypermesh-mobile-app/releases/latest/download/hypermeshmediaplayer.apk)
+[![Download Android APK](https://img.shields.io/badge/Download_APK-Latest-00E5FF?style=for-the-badge&logo=android&logoColor=black)](https://github.com/sahaveer/hypermesh-mobile-app/releases/latest/download/hypermeshmediaplayer.apk)
 
 A sleek, open-source **Peer-to-Peer Mesh Media Player** built with **Flutter** for Android (plus iOS, Web, and Desktop).
 
@@ -11,7 +11,7 @@ A sleek, open-source **Peer-to-Peer Mesh Media Player** built with **Flutter** f
 You can download and run the app directly on any Android phone using the GitHub Release:
 
 1. **Direct APK Download:** [`hypermeshmediaplayer.apk` (Latest Release)](https://github.com/sahaveer/hypermesh-mobile-app/releases/latest/download/hypermeshmediaplayer.apk)
-   *(Or open the release page: https://github.com/sahaveer/hypermesh-mobile-app/releases/tag/v1.0.0%2B1)*
+   *(Or open the latest release page: https://github.com/sahaveer/hypermesh-mobile-app/releases/latest)*
 2. Tap the downloaded `hypermeshmediaplayer.apk` file on your Android phone.
 3. Allow **"Install unknown apps"** when prompted by Android, then open **Hypermesh Media Player**.
 
