@@ -54,3 +54,8 @@ app.*.map.json
 # Build artifacts & release binaries
 *.apk
 *.aab
+
+# Local AI workspace instructions (keep out of public repo)
+AGENTS.md
+CLAUDE.md
+GEMINI.md

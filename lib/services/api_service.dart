@@ -24,6 +24,11 @@ class ApiService {
           ? httpClient!.post(uri, headers: headers, body: body)
           : http.post(uri, headers: headers, body: body);
 
+  Future<http.Response> _delete(Uri uri, {Map<String, String>? headers}) =>
+      httpClient != null
+          ? httpClient!.delete(uri, headers: headers)
+          : http.delete(uri, headers: headers);
+
   bool get isDemo => hostUrl == "http://demo.hub";
 
   bool get isAdmin => adminToken != null && adminToken!.isNotEmpty;
@@ -413,6 +418,51 @@ class ApiService {
         headers['x-admin-token'] = adminToken!;
       }
       final response = await _post(uri, headers: headers).timeout(const Duration(seconds: 4));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> pauseDownload(String taskId) async {
+    if (isDemo) return false;
+    try {
+      final uri = Uri.parse("$hostUrl/api/downloads/${Uri.encodeComponent(taskId)}/pause");
+      final headers = <String, String>{};
+      if (adminToken != null && adminToken!.isNotEmpty) {
+        headers['x-admin-token'] = adminToken!;
+      }
+      final response = await _post(uri, headers: headers).timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> resumeDownload(String taskId) async {
+    if (isDemo) return false;
+    try {
+      final uri = Uri.parse("$hostUrl/api/downloads/${Uri.encodeComponent(taskId)}/resume");
+      final headers = <String, String>{};
+      if (adminToken != null && adminToken!.isNotEmpty) {
+        headers['x-admin-token'] = adminToken!;
+      }
+      final response = await _post(uri, headers: headers).timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> deleteDownload(String taskId) async {
+    if (isDemo) return false;
+    try {
+      final uri = Uri.parse("$hostUrl/api/downloads/${Uri.encodeComponent(taskId)}");
+      final headers = <String, String>{};
+      if (adminToken != null && adminToken!.isNotEmpty) {
+        headers['x-admin-token'] = adminToken!;
+      }
+      final response = await _delete(uri, headers: headers).timeout(const Duration(seconds: 5));
       return response.statusCode == 200;
     } catch (_) {
       return false;

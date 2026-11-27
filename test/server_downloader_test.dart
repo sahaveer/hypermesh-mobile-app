@@ -249,5 +249,109 @@ void main() {
 
       await tester.pumpWidget(const SizedBox.shrink());
     });
+
+    testWidgets('ServerDownloaderDialog treats plain words as search when Download is tapped and supports pause/resume/delete', (tester) async {
+      SharedPreferences.setMockInitialValues({});
+      var downloadCalled = false;
+      var searchCalled = false;
+      String? lastAction;
+      final tasks = <Map<String, dynamic>>[
+        {
+          'id': 't-active',
+          'title': 'Active Processing Movie',
+          'status': 'processing',
+          'progress': 100,
+          'destination': 'server',
+        },
+        {
+          'id': 't-paused',
+          'title': 'Paused Track',
+          'status': 'paused',
+          'progress': 45,
+          'destination': 'server',
+        },
+      ];
+
+      final client = MockClient((req) async {
+        if (req.url.path == '/api/downloads/status') {
+          return http.Response(json.encode({'tasks': tasks}), 200);
+        }
+        if (req.url.path == '/api/downloader/search') {
+          searchCalled = true;
+          return http.Response(
+            json.encode({
+              'query': req.url.queryParameters['q'] ?? '',
+              'in_library': false,
+              'local_matches': [],
+              'youtube_results': [],
+            }),
+            200,
+          );
+        }
+        if (req.url.path == '/api/download' && req.method == 'POST') {
+          downloadCalled = true;
+          return http.Response(json.encode({'task_id': 't-x', 'destination': 'server'}), 200);
+        }
+        if (req.url.path == '/api/downloads/t-active/pause' && req.method == 'POST') {
+          lastAction = 'pause';
+          tasks[0]['status'] = 'paused';
+          return http.Response(json.encode({'message': 'paused'}), 200);
+        }
+        if ((req.url.path == '/api/downloads/t-active/resume' || req.url.path == '/api/downloads/t-paused/resume') && req.method == 'POST') {
+          lastAction = 'resume';
+          final id = req.url.pathSegments[2];
+          for (final t in tasks) {
+            if (t['id'] == id) t['status'] = 'pending';
+          }
+          return http.Response(json.encode({'message': 'resumed'}), 200);
+        }
+        if (req.url.path == '/api/downloads/t-active' && req.method == 'DELETE') {
+          lastAction = 'delete';
+          tasks.removeWhere((t) => t['id'] == 't-active');
+          return http.Response(json.encode({'message': 'deleted'}), 200);
+        }
+        return http.Response('Not Found', 404);
+      });
+
+      final api = ApiService(initialHost: 'http://127.0.0.1:8000', httpClient: client);
+      final provider = HypermeshProvider(apiService: api);
+
+      await tester.pumpWidget(
+        ChangeNotifierProvider<HypermeshProvider>.value(
+          value: provider,
+          child: const MaterialApp(
+            home: Scaffold(body: ServerDownloaderDialog()),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+
+      // Plain text + tapping Download button should search instead of downloading directly
+      await tester.enterText(find.byType(TextField), 'charlie full movie');
+      await tester.tap(find.widgetWithText(ElevatedButton, 'Start Server Download'));
+      await tester.pumpAndSettle();
+
+      expect(searchCalled, isTrue);
+      expect(downloadCalled, isFalse);
+
+      // Pause active processing task
+      await tester.tap(find.byTooltip('Pause download').first);
+      await tester.pumpAndSettle();
+      expect(lastAction, 'pause');
+
+      // Resume paused task
+      await tester.tap(find.byTooltip('Resume download').first);
+      await tester.pumpAndSettle();
+      expect(lastAction, 'resume');
+
+      // Delete task while in queue
+      await tester.tap(find.byTooltip('Delete download').first);
+      await tester.pumpAndSettle();
+      expect(lastAction, 'delete');
+      expect(find.text('Active Processing Movie'), findsNothing);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
   });
 }

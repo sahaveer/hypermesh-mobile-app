@@ -3,9 +3,11 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class AuthService {
-  // Default URL - replace with your Google Apps Script Web App URL (or leave as-is for built-in Demo Mode)
-  static const String defaultAppsScriptUrl =
-      "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec";
+  // Default URL - override at build time via --dart-define=APPS_SCRIPT_URL=... or leave placeholder for Demo Mode
+  static const String defaultAppsScriptUrl = String.fromEnvironment(
+    'APPS_SCRIPT_URL',
+    defaultValue: 'https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec',
+  );
 
   String appsScriptUrl;
 

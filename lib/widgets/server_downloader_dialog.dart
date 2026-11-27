@@ -376,10 +376,80 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
     await _fetchTasks();
   }
 
+  static final RegExp _bareMediaDomainPattern = RegExp(
+    r'^(?:www\.)?(?:youtube\.com|youtu\.be|music\.youtube\.com|open\.spotify\.com|instagram\.com|tiktok\.com|vt\.tiktok\.com|vm\.tiktok\.com|soundcloud\.com|vimeo\.com|x\.com|twitter\.com|facebook\.com|fb\.watch)\/\S+$',
+    caseSensitive: false,
+  );
+
+  bool _isMediaUrl(String raw) {
+    final clean = raw.trim();
+    if (clean.isEmpty || clean.contains(RegExp(r'\s'))) return false;
+    final lower = clean.toLowerCase();
+    if (lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('spotify:')) {
+      return true;
+    }
+    return _bareMediaDomainPattern.hasMatch(clean);
+  }
+
+  String _normalizeMediaUrl(String raw) {
+    final clean = raw.trim();
+    final lower = clean.toLowerCase();
+    if (lower.startsWith('http://') || lower.startsWith('https://') || lower.startsWith('spotify:')) {
+      return clean;
+    }
+    return 'https://$clean';
+  }
+
   Future<void> _handleStartDownload() async {
-    final url = _urlController.text.trim();
-    if (url.isEmpty) return;
-    await _enqueueUrl(url, clearInput: true);
+    final raw = _urlController.text.trim();
+    if (raw.isEmpty) return;
+    if (!_isMediaUrl(raw)) {
+      await _handleSearch();
+      return;
+    }
+    await _enqueueUrl(_normalizeMediaUrl(raw), clearInput: true);
+  }
+
+  Future<void> _pauseTask(String taskId) async {
+    if (taskId.isEmpty) return;
+    final hypermesh = context.read<HypermeshProvider>();
+    final ok = await hypermesh.apiService.pauseDownload(taskId);
+    if (!mounted) return;
+    if (!ok) {
+      setState(() {
+        _feedbackIsError = true;
+        _statusFeedback = "Could not pause download.";
+      });
+    }
+    await _fetchTasks();
+  }
+
+  Future<void> _resumeTask(String taskId) async {
+    if (taskId.isEmpty) return;
+    final hypermesh = context.read<HypermeshProvider>();
+    final ok = await hypermesh.apiService.resumeDownload(taskId);
+    if (!mounted) return;
+    if (!ok) {
+      setState(() {
+        _feedbackIsError = true;
+        _statusFeedback = "Could not resume download.";
+      });
+    }
+    await _fetchTasks();
+  }
+
+  Future<void> _deleteTask(String taskId) async {
+    if (taskId.isEmpty) return;
+    final hypermesh = context.read<HypermeshProvider>();
+    final ok = await hypermesh.apiService.deleteDownload(taskId);
+    if (!mounted) return;
+    if (!ok) {
+      setState(() {
+        _feedbackIsError = true;
+        _statusFeedback = "Could not delete download.";
+      });
+    }
+    await _fetchTasks();
   }
 
   Future<void> _pasteFromClipboard() async {
@@ -460,8 +530,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
             style: const TextStyle(color: Colors.white, fontSize: 14),
             textInputAction: TextInputAction.search,
             onSubmitted: (val) {
-              final clean = val.trim();
-              if (clean.startsWith('http://') || clean.startsWith('https://')) {
+              if (_isMediaUrl(val)) {
                 _handleStartDownload();
               } else {
                 _handleSearch();
@@ -569,27 +638,51 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
           ),
           const SizedBox(height: 10),
 
-          // Start Download Button
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton.icon(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.cyanAccent,
-                foregroundColor: Colors.black,
-                padding: const EdgeInsets.symmetric(vertical: 12),
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          // Search & Download Buttons
+          Row(
+            children: [
+              Expanded(
+                flex: 2,
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: AppTheme.cyanAccent,
+                    side: const BorderSide(color: AppTheme.cyanAccent),
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: _isSearching ? null : () => _handleSearch(),
+                  icon: _isSearching
+                      ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.cyanAccent))
+                      : const Icon(Icons.search, size: 19),
+                  label: Text(
+                    _isSearching ? "Searching..." : "Search",
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
               ),
-              onPressed: _isSubmitting ? null : _handleStartDownload,
-              icon: _isSubmitting
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
-                  : const Icon(Icons.cloud_download, size: 20),
-              label: Text(
-                _isSubmitting
-                    ? "Starting..."
-                    : (_selectedDestination == "client" ? "Download to Phone" : "Start Server Download"),
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+              const SizedBox(width: 10),
+              Expanded(
+                flex: 3,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppTheme.cyanAccent,
+                    foregroundColor: Colors.black,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                  onPressed: _isSubmitting ? null : _handleStartDownload,
+                  icon: _isSubmitting
+                      ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.black))
+                      : const Icon(Icons.cloud_download, size: 20),
+                  label: Text(
+                    _isSubmitting
+                        ? "Starting..."
+                        : (_selectedDestination == "client" ? "Download to Phone" : "Start Server Download"),
+                    style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ),
               ),
-            ),
+            ],
           ),
 
           if (_statusFeedback != null) ...[
@@ -847,6 +940,8 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                     final songId = task['song_id']?.toString() ?? '';
                     final isFinished = status == "finished" || status == "completed";
                     final isError = status == "error" || status == "failed";
+                    final isPaused = status == "paused";
+                    final isActive = !isFinished && !isError && !isPaused;
                     final isSaving = _savingTaskIds.contains(taskId);
                     final isSaved = _savedTaskIds.contains(taskId);
 
@@ -856,7 +951,13 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                       decoration: BoxDecoration(
                         color: AppTheme.surfaceLight,
                         borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: isError ? Colors.redAccent.withOpacity(0.5) : AppTheme.border),
+                        border: Border.all(
+                          color: isError
+                              ? Colors.redAccent.withOpacity(0.5)
+                              : isPaused
+                                  ? Colors.amber.withOpacity(0.5)
+                                  : AppTheme.border,
+                        ),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -868,12 +969,16 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                                     ? Icons.check_circle
                                     : isError
                                         ? Icons.error
-                                        : Icons.downloading,
+                                        : isPaused
+                                            ? Icons.pause_circle
+                                            : Icons.downloading,
                                 color: isFinished
                                     ? AppTheme.emeraldAccent
                                     : isError
                                         ? Colors.redAccent
-                                        : AppTheme.cyanAccent,
+                                        : isPaused
+                                            ? Colors.amber
+                                            : AppTheme.cyanAccent,
                                 size: 18,
                               ),
                               const SizedBox(width: 8),
@@ -889,18 +994,45 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                               Text(
                                 isError
                                     ? "Failed"
-                                    : isFinished
-                                        ? "100%"
-                                        : "${progress.toInt()}%",
+                                    : isPaused
+                                        ? "Paused ${progress.toInt()}%"
+                                        : isFinished
+                                            ? "100%"
+                                            : "${progress.toInt()}%",
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
                                   color: isError
                                       ? Colors.redAccent
-                                      : isFinished
-                                          ? AppTheme.emeraldAccent
-                                          : AppTheme.cyanAccent,
+                                      : isPaused
+                                          ? Colors.amber
+                                          : isFinished
+                                              ? AppTheme.emeraldAccent
+                                              : AppTheme.cyanAccent,
                                 ),
+                              ),
+                              if (isActive)
+                                IconButton(
+                                  tooltip: "Pause download",
+                                  icon: const Icon(Icons.pause, size: 18, color: Colors.amber),
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () => _pauseTask(taskId),
+                                ),
+                              if (isPaused)
+                                IconButton(
+                                  tooltip: "Resume download",
+                                  icon: const Icon(Icons.play_arrow, size: 18, color: AppTheme.emeraldAccent),
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () => _resumeTask(taskId),
+                                ),
+                              IconButton(
+                                tooltip: "Delete download",
+                                icon: const Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                                padding: const EdgeInsets.only(left: 4),
+                                constraints: const BoxConstraints(),
+                                onPressed: () => _deleteTask(taskId),
                               ),
                             ],
                           ),
@@ -912,7 +1044,9 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                                 ? AppTheme.emeraldAccent
                                 : isError
                                     ? Colors.redAccent
-                                    : AppTheme.cyanAccent,
+                                    : isPaused
+                                        ? Colors.amber
+                                        : AppTheme.cyanAccent,
                             minHeight: 4,
                           ),
                           if (isError && errorMsg != null && errorMsg.isNotEmpty) ...[
