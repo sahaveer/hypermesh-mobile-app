@@ -87,6 +87,7 @@ class _HomeScreenState extends State<HomeScreen> {
     final player = context.watch<PlayerProvider>();
     final patchService = context.watch<ExtensionPatchService>();
     final songs = hypermesh.filteredSongs;
+    final hasSearchQuery = hypermesh.searchQuery.trim().isNotEmpty;
 
     return SafeArea(
       child: Column(
@@ -278,9 +279,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                 child: const Icon(Icons.music_note, size: 36, color: AppTheme.cyanAccent),
                               ),
                               const SizedBox(height: 16),
-                              const Text(
-                                "No Songs in Library",
-                                style: TextStyle(
+                              Text(
+                                hasSearchQuery ? "No Matching Songs" : "No Songs in Library",
+                                style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
@@ -288,7 +289,9 @@ class _HomeScreenState extends State<HomeScreen> {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                "Add audio files from your phone storage to play offline or stream from mesh peers.",
+                                hasSearchQuery
+                                    ? "No available audio files match \"${hypermesh.searchQuery.trim()}\"."
+                                    : "Add audio files from your phone storage to play offline or stream from mesh peers.",
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 13,
@@ -305,9 +308,19 @@ class _HomeScreenState extends State<HomeScreen> {
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                                   elevation: 0,
                                 ),
-                                icon: const Icon(Icons.folder_open, size: 20),
-                                label: const Text("Select Music / Video Folders", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                onPressed: () => LocalFoldersSheet.show(context, defaultVideo: false),
+                                icon: Icon(hasSearchQuery ? Icons.clear : Icons.folder_open, size: 20),
+                                label: Text(
+                                  hasSearchQuery ? "Clear Search" : "Select Music / Video Folders",
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                ),
+                                onPressed: () {
+                                  if (hasSearchQuery) {
+                                    _searchController.clear();
+                                    hypermesh.setSearchQuery("");
+                                  } else {
+                                    LocalFoldersSheet.show(context, defaultVideo: false);
+                                  }
+                                },
                               ),
                             ],
                           ),

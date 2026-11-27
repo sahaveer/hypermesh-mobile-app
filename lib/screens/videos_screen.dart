@@ -10,8 +10,30 @@ import '../widgets/download_destination_sheet.dart';
 import '../widgets/admin_delete_dialog.dart';
 import 'video_player_screen.dart';
 
-class VideosScreen extends StatelessWidget {
+class VideosScreen extends StatefulWidget {
   const VideosScreen({super.key});
+
+  @override
+  State<VideosScreen> createState() => _VideosScreenState();
+}
+
+class _VideosScreenState extends State<VideosScreen> {
+  final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    final initialQuery = context.read<HypermeshProvider>().videoSearchQuery;
+    if (initialQuery.isNotEmpty) {
+      _searchController.text = initialQuery;
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   void _showVideoActionMenu(BuildContext context, VideoItem video) {
     final hypermesh = context.read<HypermeshProvider>();
@@ -212,6 +234,7 @@ class VideosScreen extends StatelessWidget {
     final hypermesh = context.watch<HypermeshProvider>();
     final patchService = context.watch<ExtensionPatchService>();
     final videos = hypermesh.filteredVideos;
+    final hasSearchQuery = hypermesh.videoSearchQuery.trim().isNotEmpty;
 
     return SafeArea(
       child: Column(
@@ -282,6 +305,43 @@ class VideosScreen extends StatelessWidget {
             ),
           ),
 
+          // Video Search Bar
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: TextField(
+              controller: _searchController,
+              onChanged: (val) => hypermesh.setVideoSearchQuery(val),
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              decoration: InputDecoration(
+                filled: true,
+                fillColor: AppTheme.surface,
+                hintText: "Search videos, movies, or nodes...",
+                hintStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                prefixIcon: const Icon(Icons.search, size: 20, color: AppTheme.textSecondary),
+                suffixIcon: _searchController.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear, size: 18, color: AppTheme.textSecondary),
+                        tooltip: "Clear video search",
+                        onPressed: () {
+                          _searchController.clear();
+                          hypermesh.setVideoSearchQuery("");
+                        },
+                      )
+                    : null,
+                contentPadding: const EdgeInsets.symmetric(vertical: 12),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: AppTheme.border),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                  borderSide: const BorderSide(color: AppTheme.cyanAccent, width: 1.5),
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
           // Filter Chips
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
@@ -342,9 +402,9 @@ class VideosScreen extends StatelessWidget {
                                 child: const Icon(Icons.movie, size: 36, color: AppTheme.cyanAccent),
                               ),
                               const SizedBox(height: 16),
-                              const Text(
-                                "No Videos in Library",
-                                style: TextStyle(
+                              Text(
+                                hasSearchQuery ? "No Matching Videos" : "No Videos in Library",
+                                style: const TextStyle(
                                   fontSize: 18,
                                   fontWeight: FontWeight.bold,
                                   color: Colors.white,
@@ -352,7 +412,9 @@ class VideosScreen extends StatelessWidget {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                "Add videos from your phone storage to watch offline with gesture controls or stream from peers.",
+                                hasSearchQuery
+                                    ? "No available videos match \"${hypermesh.videoSearchQuery.trim()}\"."
+                                    : "Add videos from your phone storage to watch offline with gesture controls or stream from peers.",
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 13,
@@ -369,9 +431,19 @@ class VideosScreen extends StatelessWidget {
                                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                                   elevation: 0,
                                 ),
-                                icon: const Icon(Icons.folder_open, size: 20),
-                                label: const Text("Select Video / Music Folders", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                                onPressed: () => LocalFoldersSheet.show(context, defaultVideo: true),
+                                icon: Icon(hasSearchQuery ? Icons.clear : Icons.folder_open, size: 20),
+                                label: Text(
+                                  hasSearchQuery ? "Clear Search" : "Select Video / Music Folders",
+                                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
+                                ),
+                                onPressed: () {
+                                  if (hasSearchQuery) {
+                                    _searchController.clear();
+                                    hypermesh.setVideoSearchQuery("");
+                                  } else {
+                                    LocalFoldersSheet.show(context, defaultVideo: true);
+                                  }
+                                },
                               ),
                             ],
                           ),

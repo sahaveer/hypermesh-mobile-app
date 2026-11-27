@@ -113,7 +113,7 @@ class ApiService {
     if (isDemo) return getDemoLocalSongs();
     try {
       final uri = Uri.parse("$hostUrl/api/songs?limit=1000");
-      final response = await http.get(uri).timeout(const Duration(seconds: 4));
+      final response = await _get(uri).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -161,7 +161,7 @@ class ApiService {
     if (isDemo) return getDemoLocalVideos();
     try {
       final uri = Uri.parse("$hostUrl/api/videos?limit=500");
-      final response = await http.get(uri).timeout(const Duration(seconds: 4));
+      final response = await _get(uri).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
