@@ -45,6 +45,7 @@ class HypermeshProvider extends ChangeNotifier {
 
   MeshFilter _filter = MeshFilter.all;
   String _searchQuery = "";
+  String _videoSearchQuery = "";
   bool _isLoading = false;
 
   HypermeshProvider({required this.apiService}) {
@@ -58,6 +59,7 @@ class HypermeshProvider extends ChangeNotifier {
   Set<String> get favoriteIds => _favoriteIds;
   MeshFilter get filter => _filter;
   String get searchQuery => _searchQuery;
+  String get videoSearchQuery => _videoSearchQuery;
   bool get isLoading => _isLoading;
 
   String get deviceId => _deviceId;
@@ -150,11 +152,12 @@ class HypermeshProvider extends ChangeNotifier {
       return sourceList;
     }
 
-    final query = _searchQuery.toLowerCase();
+    final query = _searchQuery.trim().toLowerCase();
     return sourceList.where((song) {
       return song.title.toLowerCase().contains(query) ||
           song.artist.toLowerCase().contains(query) ||
-          song.album.toLowerCase().contains(query);
+          song.album.toLowerCase().contains(query) ||
+          song.sourceNodeName.toLowerCase().contains(query);
     }).toList();
   }
 
@@ -182,14 +185,15 @@ class HypermeshProvider extends ChangeNotifier {
         break;
     }
 
-    if (_searchQuery.trim().isEmpty) {
+    if (_videoSearchQuery.trim().isEmpty) {
       return sourceList;
     }
 
-    final query = _searchQuery.toLowerCase();
+    final query = _videoSearchQuery.trim().toLowerCase();
     return sourceList.where((video) {
       return video.title.toLowerCase().contains(query) ||
-          video.resolution.toLowerCase().contains(query);
+          video.resolution.toLowerCase().contains(query) ||
+          video.sourceNodeName.toLowerCase().contains(query);
     }).toList();
   }
 
@@ -200,6 +204,11 @@ class HypermeshProvider extends ChangeNotifier {
 
   void setSearchQuery(String query) {
     _searchQuery = query;
+    notifyListeners();
+  }
+
+  void setVideoSearchQuery(String query) {
+    _videoSearchQuery = query;
     notifyListeners();
   }
 
