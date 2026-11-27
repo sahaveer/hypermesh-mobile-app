@@ -142,41 +142,6 @@ class AppUpdateService {
     return (version.isEmpty ? '0.0.0' : version, build);
   }
 
-  /// Checks for remote server updates (Option B - Online OTA Update)
-  static Future<UpdateInfo?> checkServerUpdate(String hostUrl) async {
-    try {
-      final cleanHost = hostUrl.endsWith('/') ? hostUrl.substring(0, hostUrl.length - 1) : hostUrl;
-      final uri = Uri.parse("$cleanHost/api/app/version");
-      final response = await http.get(uri).timeout(const Duration(seconds: 4));
-
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final buildNumber = (data['build_number'] is num) ? (data['build_number'] as num).toInt() : 1;
-        final version = data['version']?.toString() ?? '1.0.0';
-        var apkUrl = data['apk_url']?.toString() ?? '/api/app/latest.apk';
-
-        if (apkUrl.startsWith('/')) {
-          apkUrl = "$cleanHost$apkUrl";
-        }
-
-        final notes = data['release_notes']?.toString() ?? "Update available from server.";
-
-        if (buildNumber > AppConfig.buildNumber) {
-          return UpdateInfo(
-            version: version,
-            buildNumber: buildNumber,
-            apkUrl: apkUrl,
-            releaseNotes: notes,
-            isPeerUpdate: false,
-            sourceName: "Media Server",
-          );
-        }
-      }
-    } catch (_) {}
-
-    return null;
-  }
-
   /// Downloads the APK and triggers the native Android installer
   static Future<bool> downloadAndInstall({
     required UpdateInfo update,

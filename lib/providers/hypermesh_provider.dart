@@ -671,13 +671,12 @@ class HypermeshProvider extends ChangeNotifier {
       if (generation != _refreshGeneration) return;
       _updateBackgroundNotification();
 
-      // 4. Check for updates: GitHub release first, then server OTA, then
-      //    peer mesh (only when the user has opted in). Demo mode skips all.
+      // 4. Check for updates: GitHub release first, then peer mesh (only when
+      //    the user has opted in). Demo mode skips all.
       final allowPeer = await AppUpdateService.peerUpdatesAllowed();
       final update = apiService.isDemo
           ? null
           : await AppUpdateService.checkGithubRelease(AppConfig.githubReleaseRepo) ??
-              await AppUpdateService.checkServerUpdate(apiService.hostUrl) ??
               AppUpdateService.checkPeerUpdates(_peerNodes, allowPeerUpdates: allowPeer);
       if (generation == _refreshGeneration) _availableUpdate = update;
     } catch (_) {}
@@ -693,13 +692,6 @@ class HypermeshProvider extends ChangeNotifier {
       _availableUpdate = githubUp;
       notifyListeners();
       return githubUp;
-    }
-
-    final serverUp = await AppUpdateService.checkServerUpdate(apiService.hostUrl);
-    if (serverUp != null) {
-      _availableUpdate = serverUp;
-      notifyListeners();
-      return serverUp;
     }
 
     final allowPeer = await AppUpdateService.peerUpdatesAllowed();
