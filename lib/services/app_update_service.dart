@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../models/peer_node.dart';
 import 'background_mesh_service.dart';
@@ -28,23 +29,53 @@ class UpdateInfo {
 }
 
 class AppUpdateService {
-  /// Checks for peer updates on local Wi-Fi / Hotspot (Option C - P2P Mesh Update)
-  static UpdateInfo? checkPeerUpdates(List<PeerNode> peers) {
-    PeerNode? bestPeer;
+  static const String peerUpdatesEnabledKey = 'allow_peer_app_updates';
 
+  /// Peer app updates are OFF by default: the UDP beacon's build_number
+  /// is attacker-controllable on any LAN, so auto-trusting the highest
+  /// build means auto-installing attacker-supplied APKs. A paired peer
+  /// can also lie. The user must opt in in Settings before this fires.
+  static Future<bool> peerUpdatesAllowed() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(peerUpdatesEnabledKey) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> setPeerUpdatesAllowed(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(peerUpdatesEnabledKey, value);
+  }
+
+  /// Checks for peer updates on local Wi-Fi / Hotspot (Option C - P2P Mesh Update).
+  /// Returns null unless the caller explicitly opts in via [allowPeerUpdates];
+  /// pair this with [peerUpdatesAllowed] on the call site.
+  static UpdateInfo? checkPeerUpdates(
+    List<PeerNode> peers, {
+    bool allowPeerUpdates = false,
+  }) {
+    if (!allowPeerUpdates) return null;
+
+    PeerNode? bestPeer;
     for (final peer in peers) {
-      if (peer.isOnline && peer.buildNumber > AppConfig.buildNumber) {
-        if (bestPeer == null || peer.buildNumber > bestPeer.buildNumber) {
-          bestPeer = peer;
-        }
+      // Only paired peers (ones whose mesh token we already hold) are eligible.
+      // An unpaired beacon on the LAN cannot push an install prompt.
+      if (!peer.isOnline) continue;
+      if (peer.meshToken == null || peer.meshToken!.isEmpty) continue;
+      if (peer.buildNumber <= AppConfig.buildNumber) continue;
+      if (bestPeer == null || peer.buildNumber > bestPeer.buildNumber) {
+        bestPeer = peer;
       }
     }
 
     if (bestPeer != null) {
+      final token = bestPeer.meshToken!;
       return UpdateInfo(
         version: bestPeer.appVersion,
         buildNumber: bestPeer.buildNumber,
-        apkUrl: "${bestPeer.baseUrl}/api/app/latest.apk",
+        apkUrl: "${bestPeer.baseUrl}/api/app/latest.apk?t=${Uri.encodeQueryComponent(token)}",
         releaseNotes: "New update available from ${bestPeer.name} over local Wi-Fi mesh.",
         isPeerUpdate: true,
         sourceName: bestPeer.name,

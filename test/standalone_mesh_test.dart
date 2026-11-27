@@ -104,30 +104,43 @@ void main() {
       client.close();
     });
 
-    test('AppUpdateService detects newer peer updates on local mesh', () {
-      final peers = [
-        PeerNode(
-          id: 'peer-old',
-          name: 'Old Peer',
-          host: '192.168.1.10',
-          appVersion: '1.0.0',
-          buildNumber: 1,
-        ),
-        PeerNode(
-          id: 'peer-new',
-          name: 'Alex (New Node)',
-          host: '192.168.1.50',
-          appVersion: '9.9.9',
-          buildNumber: AppConfig.buildNumber + 2,
-        ),
-      ];
+    test('AppUpdateService peer updates are gated behind opt-in and a paired token', () {
+      final untrustedPeer = PeerNode(
+        id: 'peer-untrusted',
+        name: 'Untrusted Beacon',
+        host: '192.168.1.50',
+        appVersion: '9.9.9',
+        buildNumber: AppConfig.buildNumber + 2,
+      );
+      final pairedPeer = PeerNode(
+        id: 'peer-new',
+        name: 'Alex (Paired)',
+        host: '192.168.1.60',
+        appVersion: '9.9.9',
+        buildNumber: AppConfig.buildNumber + 2,
+        meshToken: 'paired-token',
+      );
 
-      final update = AppUpdateService.checkPeerUpdates(peers);
+      // Default: peer updates disabled entirely.
+      expect(AppUpdateService.checkPeerUpdates([untrustedPeer, pairedPeer]), isNull);
+
+      // Opted in but only unpaired peer available: still no update prompt.
+      expect(
+        AppUpdateService.checkPeerUpdates([untrustedPeer], allowPeerUpdates: true),
+        isNull,
+      );
+
+      // Opted in + paired peer: update is offered, and APK URL carries the peer's token.
+      final update = AppUpdateService.checkPeerUpdates(
+        [untrustedPeer, pairedPeer],
+        allowPeerUpdates: true,
+      );
       expect(update, isNotNull);
       expect(update!.version, '9.9.9');
       expect(update.buildNumber, AppConfig.buildNumber + 2);
       expect(update.isPeerUpdate, true);
-      expect(update.sourceName, 'Alex (New Node)');
+      expect(update.sourceName, 'Alex (Paired)');
+      expect(update.apkUrl.contains('t=paired-token'), true);
     });
 
     test('LocalMediaStore scans multiple folders and removes folder cleanly', () async {

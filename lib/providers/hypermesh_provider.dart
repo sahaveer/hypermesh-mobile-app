@@ -597,10 +597,12 @@ class HypermeshProvider extends ChangeNotifier {
       if (generation != _refreshGeneration) return;
       _updateBackgroundNotification();
 
-      // 4. Check for updates (Option C: Peer Mesh, Option B: Server OTA)
-      final update = apiService.isDemo ? null :
-          AppUpdateService.checkPeerUpdates(_peerNodes) ??
-          await AppUpdateService.checkServerUpdate(apiService.hostUrl);
+      // 4. Check for updates (Option B: Server OTA always; Option C: Peer Mesh only if user opted in)
+      final allowPeer = await AppUpdateService.peerUpdatesAllowed();
+      final update = apiService.isDemo
+          ? null
+          : AppUpdateService.checkPeerUpdates(_peerNodes, allowPeerUpdates: allowPeer) ??
+              await AppUpdateService.checkServerUpdate(apiService.hostUrl);
       if (generation == _refreshGeneration) _availableUpdate = update;
     } catch (_) {}
 
@@ -610,17 +612,25 @@ class HypermeshProvider extends ChangeNotifier {
   }
 
   Future<UpdateInfo?> checkForUpdates() async {
-    final peerUp = AppUpdateService.checkPeerUpdates(_peerNodes);
-    if (peerUp != null) {
-      _availableUpdate = peerUp;
+    final serverUp = await AppUpdateService.checkServerUpdate(apiService.hostUrl);
+    if (serverUp != null) {
+      _availableUpdate = serverUp;
       notifyListeners();
-      return peerUp;
+      return serverUp;
     }
 
-    final serverUp = await AppUpdateService.checkServerUpdate(apiService.hostUrl);
-    _availableUpdate = serverUp;
+    final allowPeer = await AppUpdateService.peerUpdatesAllowed();
+    final peerUp = AppUpdateService.checkPeerUpdates(_peerNodes, allowPeerUpdates: allowPeer);
+    _availableUpdate = peerUp;
     notifyListeners();
-    return serverUp;
+    return peerUp;
+  }
+
+  Future<bool> isPeerUpdatesAllowed() => AppUpdateService.peerUpdatesAllowed();
+
+  Future<void> setPeerUpdatesAllowed(bool value) async {
+    await AppUpdateService.setPeerUpdatesAllowed(value);
+    notifyListeners();
   }
 
   void _mergePeers(List<PeerNode> discovered) {
