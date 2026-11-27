@@ -6,6 +6,8 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -211,6 +213,18 @@ class MainActivity : FlutterActivity() {
                 }
                 "isServiceRunning" -> {
                     result.success(MeshForegroundService.isRunning)
+                }
+                "isWifiConnected" -> {
+                    try {
+                        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+                        val active = cm?.activeNetwork
+                        val caps = if (active != null) cm.getNetworkCapabilities(active) else null
+                        val isWifi = caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true ||
+                            caps?.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) == true
+                        result.success(isWifi)
+                    } catch (e: Exception) {
+                        result.success(true)
+                    }
                 }
                 "getAppSourceApkPath" -> {
                     try {

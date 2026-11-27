@@ -61,6 +61,7 @@ class SharedMediaFile {
 class LocalMediaStore {
   static const String _storageKey = "hypermesh_shared_files_v1";
   static const String _foldersKey = "hypermesh_shared_folders_v1";
+  static const String _autoShareFoldersKey = "hypermesh_auto_share_folders_v1";
 
   static const Set<String> audioExtensions = {
     '.mp3',
@@ -85,6 +86,7 @@ class LocalMediaStore {
 
   final List<SharedMediaFile> _sharedFiles = [];
   final List<String> _sharedFolders = [];
+  final Set<String> _autoShareFolders = {};
 
   List<SharedMediaFile> get sharedFiles => List.unmodifiable(_sharedFiles);
   // Every local audio/video the app knows about — visible to the user even
@@ -99,12 +101,22 @@ class LocalMediaStore {
       _sharedFiles.where((f) => f.isVideo && f.sharedWithMesh).toList();
   List<String> get sharedFolders => List.unmodifiable(_sharedFolders);
 
+  bool isFolderAutoShared(String folderPath) =>
+      _autoShareFolders.contains(_normalizeDirPrefix(folderPath));
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     final rawList = prefs.getStringList(_storageKey) ?? [];
     final rawFolders = prefs.getStringList(_foldersKey) ?? [];
+    final rawAutoShare = prefs.getStringList(_autoShareFoldersKey) ?? [];
     _sharedFiles.clear();
     _sharedFolders.clear();
+    _autoShareFolders.clear();
+
+    for (final folder in rawAutoShare) {
+      final norm = _normalizeDirPrefix(folder);
+      if (norm.isNotEmpty) _autoShareFolders.add(norm);
+    }
 
     for (final folder in rawFolders) {
       final clean = folder.trim();
@@ -135,6 +147,7 @@ class LocalMediaStore {
       throw FileSystemException('Could not save the local library');
     }
     await prefs.setStringList(_foldersKey, _sharedFolders);
+    await prefs.setStringList(_autoShareFoldersKey, _autoShareFolders.toList());
   }
 
   Future<bool> _ensureStoragePermissions() async {
@@ -155,7 +168,11 @@ class LocalMediaStore {
   }
 
   /// Opens native directory picker and scans all audio & video files inside.
-  Future<({String? folderPath, List<SharedMediaFile> added, String? error})> pickAndAddFolder() async {
+  /// By default [shareEverything] is false so files remain openable locally
+  /// and are only shared with mesh peers if ticked or selected explicitly.
+  Future<({String? folderPath, List<SharedMediaFile> added, String? error})> pickAndAddFolder({
+    bool shareEverything = false,
+  }) async {
     try {
       final granted = await _ensureStoragePermissions();
       if (!granted) {
@@ -174,7 +191,7 @@ class LocalMediaStore {
         return (folderPath: null, added: <SharedMediaFile>[], error: null);
       }
 
-      final added = await addAndScanFolder(folderPath);
+      final added = await addAndScanFolder(folderPath, shareEverything: shareEverything);
       return (folderPath: folderPath, added: added, error: null);
     } catch (e) {
       debugPrint("Error picking folder: $e");
@@ -183,24 +200,40 @@ class LocalMediaStore {
   }
 
   /// Registers [folderPath] and scans all supported audio/video files inside it.
-  Future<List<SharedMediaFile>> addAndScanFolder(String folderPath) async {
+  Future<List<SharedMediaFile>> addAndScanFolder(
+    String folderPath, {
+    bool? shareEverything,
+  }) async {
     final normalized = folderPath.trim();
     if (normalized.isEmpty) return [];
 
     if (!_sharedFolders.contains(normalized)) {
       _sharedFolders.add(normalized);
     }
+    final normKey = _normalizeDirPrefix(normalized);
+    if (shareEverything != null) {
+      if (shareEverything) {
+        _autoShareFolders.add(normKey);
+      } else {
+        _autoShareFolders.remove(normKey);
+      }
+    }
 
-    final added = await scanFolder(normalized);
+    final effectiveShare = shareEverything ?? _autoShareFolders.contains(normKey);
+    final added = await scanFolder(normalized, shareWithMesh: effectiveShare);
     await save();
     return added;
   }
 
   /// Scans [folderPath] recursively for audio & video files not yet in [_sharedFiles].
-  Future<List<SharedMediaFile>> scanFolder(String folderPath) async {
+  Future<List<SharedMediaFile>> scanFolder(
+    String folderPath, {
+    bool? shareWithMesh,
+  }) async {
     final dir = Directory(folderPath);
     if (!dir.existsSync()) return [];
 
+    final effectiveShare = shareWithMesh ?? isFolderAutoShared(folderPath);
     final existingPaths = _sharedFiles.map((f) => f.path).toSet();
     final added = <SharedMediaFile>[];
     final queue = <Directory>[dir];
@@ -247,6 +280,7 @@ class LocalMediaStore {
           isVideo: isVideo,
           duration: _estimateDuration(fileSize, isVideo: isVideo),
           resolution: isVideo ? _guessResolution(fileName) : "",
+          sharedWithMesh: effectiveShare,
         );
 
         _sharedFiles.insert(0, item);
@@ -263,7 +297,7 @@ class LocalMediaStore {
     _sharedFiles.removeWhere((item) => !File(item.path).existsSync());
     int totalAdded = 0;
     for (final folder in List<String>.from(_sharedFolders)) {
-      final added = await scanFolder(folder);
+      final added = await scanFolder(folder, shareWithMesh: isFolderAutoShared(folder));
       totalAdded += added.length;
     }
     await save();
@@ -274,11 +308,43 @@ class LocalMediaStore {
   Future<void> removeFolder(String folderPath) async {
     final normalized = _normalizeDirPrefix(folderPath);
     _sharedFolders.removeWhere((f) => _normalizeDirPrefix(f) == normalized);
+    _autoShareFolders.remove(normalized);
     _sharedFiles.removeWhere((item) {
       final itemNorm = item.path.replaceAll('\\', '/');
       return itemNorm == normalized || itemNorm.startsWith('$normalized/');
     });
     await save();
+  }
+
+  Future<void> setFolderAutoShare(String folderPath, bool shareEverything) async {
+    final normalized = _normalizeDirPrefix(folderPath);
+    if (shareEverything) {
+      _autoShareFolders.add(normalized);
+    } else {
+      _autoShareFolders.remove(normalized);
+    }
+    for (final item in _sharedFiles) {
+      final itemNorm = item.path.replaceAll('\\', '/');
+      if (itemNorm == normalized || itemNorm.startsWith('$normalized/')) {
+        item.sharedWithMesh = shareEverything;
+      }
+    }
+    await save();
+  }
+
+  Future<int> setFilesSharedWithMesh(Iterable<String> ids, bool shared) async {
+    final idSet = ids.toSet();
+    int updated = 0;
+    for (final item in _sharedFiles) {
+      if (idSet.contains(item.id) && item.sharedWithMesh != shared) {
+        item.sharedWithMesh = shared;
+        updated++;
+      }
+    }
+    if (updated > 0) {
+      await save();
+    }
+    return updated;
   }
 
   int countFilesInFolder(String folderPath) {
@@ -289,8 +355,12 @@ class LocalMediaStore {
     }).length;
   }
 
-  /// Lets the user pick audio or video files from device storage
-  Future<List<SharedMediaFile>> pickAndAddFiles({bool isVideo = false}) async {
+  /// Lets the user pick audio or video files from device storage.
+  /// Defaults [shareWithMesh] to false so picked files open locally and are shared explicitly.
+  Future<List<SharedMediaFile>> pickAndAddFiles({
+    bool isVideo = false,
+    bool shareWithMesh = false,
+  }) async {
     try {
       final pickedFiles = await FilePicker.pickFiles(
         type: isVideo ? FileType.video : FileType.audio,
@@ -306,7 +376,7 @@ class LocalMediaStore {
         final file = File(picked.path!);
         if (!file.existsSync()) continue;
 
-        // Check if already shared
+        // Check if already tracked
         if (_sharedFiles.any((f) => f.path == picked.path)) continue;
 
         final fileName = picked.name;
@@ -321,6 +391,7 @@ class LocalMediaStore {
           isVideo: isVideo,
           duration: _estimateDuration(fileSize, isVideo: isVideo),
           resolution: isVideo ? _guessResolution(fileName) : "",
+          sharedWithMesh: shareWithMesh,
         );
 
         _sharedFiles.insert(0, item);

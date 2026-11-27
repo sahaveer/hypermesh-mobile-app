@@ -12,6 +12,9 @@ class SongTile extends StatelessWidget {
   final bool isCurrent;
   final bool isPlaying;
   final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+  final bool isSelectionMode;
+  final bool isSelected;
 
   const SongTile({
     super.key,
@@ -19,6 +22,9 @@ class SongTile extends StatelessWidget {
     required this.isCurrent,
     required this.isPlaying,
     required this.onTap,
+    this.onLongPress,
+    this.isSelectionMode = false,
+    this.isSelected = false,
   });
 
   void _showActionMenu(BuildContext context) {
@@ -222,20 +228,38 @@ class SongTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final hypermesh = context.watch<HypermeshProvider>();
     final isFav = hypermesh.isFavorite(song.id);
+    final isLocal = hypermesh.isLocalSharedMedia(song.id);
+    final isShared = isLocal && hypermesh.isFileSharedWithMesh(song.id);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       decoration: BoxDecoration(
-        color: isCurrent ? AppTheme.surfaceLight : AppTheme.surface,
+        color: isSelected
+            ? AppTheme.cyanAccent.withOpacity(0.14)
+            : isCurrent
+                ? AppTheme.surfaceLight
+                : AppTheme.surface,
         borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: isCurrent ? AppTheme.cyanAccent : AppTheme.border,
-          width: isCurrent ? 1.5 : 1,
+          color: isSelected
+              ? AppTheme.cyanAccent
+              : isCurrent
+                  ? AppTheme.cyanAccent
+                  : AppTheme.border,
+          width: (isCurrent || isSelected) ? 1.5 : 1,
         ),
       ),
       child: ListTile(
         contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
-        leading: Stack(
+        onLongPress: onLongPress,
+        leading: isSelectionMode && isLocal
+            ? Checkbox(
+                value: isSelected,
+                activeColor: AppTheme.cyanAccent,
+                checkColor: Colors.black,
+                onChanged: (_) => onTap(),
+              )
+            : Stack(
           alignment: Alignment.center,
           children: [
             Container(
@@ -308,6 +332,28 @@ class SongTile extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 8),
+            if (isLocal) ...[
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                margin: const EdgeInsets.only(right: 6),
+                decoration: BoxDecoration(
+                  color: (isShared ? AppTheme.emeraldAccent : AppTheme.surfaceLight).withOpacity(0.22),
+                  borderRadius: BorderRadius.circular(4),
+                  border: Border.all(
+                    color: isShared ? AppTheme.emeraldAccent.withOpacity(0.5) : AppTheme.border,
+                    width: 0.7,
+                  ),
+                ),
+                child: Text(
+                  isShared ? "Shared" : "Private",
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    color: isShared ? AppTheme.emeraldAccent : AppTheme.textSecondary,
+                  ),
+                ),
+              ),
+            ],
             Expanded(
               child: Text(
                 song.artist,

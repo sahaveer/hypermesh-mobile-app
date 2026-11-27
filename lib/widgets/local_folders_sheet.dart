@@ -23,13 +23,16 @@ class LocalFoldersSheet extends StatefulWidget {
 
 class _LocalFoldersSheetState extends State<LocalFoldersSheet> {
   bool _isBusy = false;
+  bool _shareEverythingInFolder = false;
 
   Future<void> _handleSelectFolder() async {
     if (_isBusy) return;
     setState(() => _isBusy = true);
 
     final hypermesh = context.read<HypermeshProvider>();
-    final result = await hypermesh.pickLocalFolder();
+    final result = await hypermesh.pickLocalFolder(
+      shareEverything: _shareEverythingInFolder,
+    );
     if (!mounted) return;
     setState(() => _isBusy = false);
 
@@ -43,11 +46,17 @@ class _LocalFoldersSheetState extends State<LocalFoldersSheet> {
     if (result.folderPath != null) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("Folder added! Found ${result.addedCount} new audio/video file(s)."),
+          content: Text(
+            _shareEverythingInFolder
+                ? "Folder linked & shared! Found ${result.addedCount} audio/video file(s)."
+                : "Folder linked privately! Found ${result.addedCount} file(s). Multi-select in Music/Videos to share.",
+          ),
           backgroundColor: AppTheme.emeraldAccent,
         ),
       );
-      await hypermesh.checkAndPromptBackgroundSharing(context);
+      if (_shareEverythingInFolder) {
+        await hypermesh.checkAndPromptBackgroundSharing(context);
+      }
     }
   }
 
@@ -78,11 +87,10 @@ class _LocalFoldersSheetState extends State<LocalFoldersSheet> {
     if (added > 0) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text("Added $added ${isVideo ? 'video' : 'audio'} file(s) to your library & mesh!"),
+          content: Text("Added $added ${isVideo ? 'video' : 'audio'} file(s) to your library. Long-press or use Select to share."),
           backgroundColor: AppTheme.emeraldAccent,
         ),
       );
-      await hypermesh.checkAndPromptBackgroundSharing(context);
     }
   }
 
@@ -138,10 +146,42 @@ class _LocalFoldersSheetState extends State<LocalFoldersSheet> {
               ),
               const SizedBox(height: 6),
               const Text(
-                "Select one or multiple folders containing your audio & video files. Hypermesh plays them offline and shares them with connected mesh peers.",
+                "Link folders so files stay open in your app for offline playback. Sharing is off by default — tick \"Share everything\" or multi-select files individually.",
                 style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
               ),
-              const SizedBox(height: 16),
+              const SizedBox(height: 8),
+              Container(
+                decoration: BoxDecoration(
+                  color: AppTheme.surfaceLight,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: _shareEverythingInFolder
+                        ? AppTheme.emeraldAccent.withOpacity(0.6)
+                        : AppTheme.border,
+                  ),
+                ),
+                child: CheckboxListTile(
+                  dense: true,
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 10),
+                  activeColor: AppTheme.emeraldAccent,
+                  checkColor: Colors.black,
+                  value: _shareEverythingInFolder,
+                  onChanged: _isBusy
+                      ? null
+                      : (val) => setState(() => _shareEverythingInFolder = val ?? false),
+                  title: const Text(
+                    "Share everything in this folder",
+                    style: TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
+                  ),
+                  subtitle: Text(
+                    _shareEverythingInFolder
+                        ? "All files in the chosen folder will be shared with mesh peers."
+                        : "Private by default — folder stays open in app, share files explicitly.",
+                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                  ),
+                ),
+              ),
+              const SizedBox(height: 12),
               Row(
                 children: [
                   Expanded(
@@ -215,10 +255,32 @@ class _LocalFoldersSheetState extends State<LocalFoldersSheet> {
                                     style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600),
                                   ),
                                   Text(
-                                    "$count audio/video file(s)",
-                                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                                    "$count audio/video file(s) • ${hypermesh.isFolderAutoShared(folder) ? 'Sharing all' : 'Explicit share'}",
+                                    style: TextStyle(
+                                      color: hypermesh.isFolderAutoShared(folder)
+                                          ? AppTheme.emeraldAccent
+                                          : AppTheme.textSecondary,
+                                      fontSize: 11,
+                                    ),
                                   ),
                                 ],
+                              ),
+                            ),
+                            Tooltip(
+                              message: "Share everything in this folder",
+                              child: Checkbox(
+                                value: hypermesh.isFolderAutoShared(folder),
+                                activeColor: AppTheme.emeraldAccent,
+                                checkColor: Colors.black,
+                                onChanged: _isBusy
+                                    ? null
+                                    : (val) async {
+                                        final shareAll = val ?? false;
+                                        await hypermesh.setFolderAutoShare(folder, shareAll);
+                                        if (shareAll && context.mounted) {
+                                          await hypermesh.checkAndPromptBackgroundSharing(context);
+                                        }
+                                      },
                               ),
                             ),
                             IconButton(

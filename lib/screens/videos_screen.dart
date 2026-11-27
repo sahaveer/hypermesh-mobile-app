@@ -19,6 +19,8 @@ class VideosScreen extends StatefulWidget {
 
 class _VideosScreenState extends State<VideosScreen> {
   final TextEditingController _searchController = TextEditingController();
+  bool _isSelectionMode = false;
+  final Set<String> _selectedVideoIds = {};
 
   @override
   void initState() {
@@ -246,30 +248,54 @@ class _VideosScreenState extends State<VideosScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Row(
-                  children: [
-                    Icon(Icons.movie, color: AppTheme.cyanAccent, size: 24),
-                    SizedBox(width: 10),
-                    Text(
-                      "VIDEOS & MOVIES",
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 1.5,
-                        color: Colors.white,
+                const Expanded(
+                  child: Row(
+                    children: [
+                      Icon(Icons.movie, color: AppTheme.cyanAccent, size: 22),
+                      SizedBox(width: 8),
+                      Flexible(
+                        child: Text(
+                          "VIDEOS & MOVIES",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 1.2,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (hypermesh.localVideos.isNotEmpty) ...[
+                      IconButton(
+                        tooltip: _isSelectionMode ? "Cancel selection" : "Multi-select videos to share",
+                        visualDensity: VisualDensity.compact,
+                        icon: Icon(
+                          _isSelectionMode ? Icons.close : Icons.checklist,
+                          color: _isSelectionMode ? Colors.orangeAccent : AppTheme.cyanAccent,
+                          size: 20,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _isSelectionMode = !_isSelectionMode;
+                            if (!_isSelectionMode) _selectedVideoIds.clear();
+                          });
+                        },
+                      ),
+                    ],
                     if (patchService.isPatchActive || hypermesh.serverDownloaderAvailable) ...[
                       IconButton(
-                        icon: const Icon(Icons.cloud_download, color: AppTheme.cyanAccent, size: 22),
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.cloud_download, color: AppTheme.cyanAccent, size: 20),
                         tooltip: "Web Media Importer",
                         onPressed: () => ServerDownloaderDialog.show(context),
                       ),
-                      const SizedBox(width: 4),
                     ],
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
@@ -282,13 +308,13 @@ class _VideosScreenState extends State<VideosScreen> {
                         ),
                         elevation: 0,
                       ),
-                      icon: const Icon(Icons.folder_open, size: 16),
-                      label: const Text("Folders / Add", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      icon: const Icon(Icons.folder_open, size: 15),
+                      label: const Text("Folders / Add", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                       onPressed: () => LocalFoldersSheet.show(context, defaultVideo: true),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                       decoration: BoxDecoration(
                         color: AppTheme.surfaceLight,
                         borderRadius: BorderRadius.circular(20),
@@ -296,7 +322,7 @@ class _VideosScreenState extends State<VideosScreen> {
                       ),
                       child: Text(
                         "${hypermesh.totalHypermeshVideosCount} Available",
-                        style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
+                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: AppTheme.cyanAccent),
                       ),
                     ),
                   ],
@@ -380,6 +406,56 @@ class _VideosScreenState extends State<VideosScreen> {
           ),
           const SizedBox(height: 12),
 
+          if (_isSelectionMode)
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceLight,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.cyanAccent.withOpacity(0.6)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      "${_selectedVideoIds.length} selected",
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _selectedVideoIds.isEmpty
+                        ? null
+                        : () async {
+                            await hypermesh.setFilesSharedWithMesh(_selectedVideoIds, true);
+                            if (context.mounted) {
+                              setState(() {
+                                _isSelectionMode = false;
+                                _selectedVideoIds.clear();
+                              });
+                              await hypermesh.checkAndPromptBackgroundSharing(context);
+                            }
+                          },
+                    child: const Text("Share", style: TextStyle(color: AppTheme.emeraldAccent, fontWeight: FontWeight.bold)),
+                  ),
+                  TextButton(
+                    onPressed: _selectedVideoIds.isEmpty
+                        ? null
+                        : () async {
+                            await hypermesh.setFilesSharedWithMesh(_selectedVideoIds, false);
+                            if (mounted) {
+                              setState(() {
+                                _isSelectionMode = false;
+                                _selectedVideoIds.clear();
+                              });
+                            }
+                          },
+                    child: const Text("Private", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
+
           // Videos Grid
           Expanded(
             child: hypermesh.isLoading
@@ -458,17 +534,43 @@ class _VideosScreenState extends State<VideosScreen> {
                           itemBuilder: (context, index) {
                             final video = videos[index];
                             final isFav = hypermesh.isFavorite(video.id);
+                            final isLocal = hypermesh.isLocalSharedMedia(video.id);
+                            final isShared = isLocal && hypermesh.isFileSharedWithMesh(video.id);
+                            final isSelected = _selectedVideoIds.contains(video.id);
 
                             return Container(
                               margin: const EdgeInsets.only(bottom: 12),
                               decoration: BoxDecoration(
-                                color: AppTheme.surface,
+                                color: isSelected ? AppTheme.cyanAccent.withOpacity(0.14) : AppTheme.surface,
                                 borderRadius: BorderRadius.circular(16),
-                                border: Border.all(color: AppTheme.border),
+                                border: Border.all(
+                                  color: isSelected ? AppTheme.cyanAccent : AppTheme.border,
+                                  width: isSelected ? 1.5 : 1,
+                                ),
                               ),
                               child: InkWell(
                                 borderRadius: BorderRadius.circular(16),
+                                onLongPress: isLocal
+                                    ? () {
+                                        setState(() {
+                                          _isSelectionMode = true;
+                                          _selectedVideoIds.add(video.id);
+                                        });
+                                      }
+                                    : null,
                                 onTap: () {
+                                  if (_isSelectionMode) {
+                                    if (!isLocal) return;
+                                    setState(() {
+                                      if (isSelected) {
+                                        _selectedVideoIds.remove(video.id);
+                                        if (_selectedVideoIds.isEmpty) _isSelectionMode = false;
+                                      } else {
+                                        _selectedVideoIds.add(video.id);
+                                      }
+                                    });
+                                    return;
+                                  }
                                   Navigator.push(
                                     context,
                                     MaterialPageRoute(
@@ -483,6 +585,22 @@ class _VideosScreenState extends State<VideosScreen> {
                                   padding: const EdgeInsets.all(12),
                                   child: Row(
                                     children: [
+                                      if (_isSelectionMode && isLocal)
+                                        Checkbox(
+                                          value: isSelected,
+                                          activeColor: AppTheme.cyanAccent,
+                                          checkColor: Colors.black,
+                                          onChanged: (_) {
+                                            setState(() {
+                                              if (isSelected) {
+                                                _selectedVideoIds.remove(video.id);
+                                                if (_selectedVideoIds.isEmpty) _isSelectionMode = false;
+                                              } else {
+                                                _selectedVideoIds.add(video.id);
+                                              }
+                                            });
+                                          },
+                                        ),
                                       // Video Thumbnail Box
                                       Stack(
                                         alignment: Alignment.center,
@@ -569,13 +687,39 @@ class _VideosScreenState extends State<VideosScreen> {
                                               ],
                                             ),
                                             const SizedBox(height: 4),
-                                            Text(
-                                              "Source: ${video.sourceNodeName}",
-                                              style: TextStyle(
-                                                fontSize: 10,
-                                                color: video.isPeer ? AppTheme.purpleAccent : AppTheme.cyanAccent,
-                                                fontWeight: FontWeight.w600,
-                                              ),
+                                            Row(
+                                              children: [
+                                                Text(
+                                                  "Source: ${video.sourceNodeName}",
+                                                  style: TextStyle(
+                                                    fontSize: 10,
+                                                    color: video.isPeer ? AppTheme.purpleAccent : AppTheme.cyanAccent,
+                                                    fontWeight: FontWeight.w600,
+                                                  ),
+                                                ),
+                                                if (isLocal) ...[
+                                                  const SizedBox(width: 6),
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                                    decoration: BoxDecoration(
+                                                      color: (isShared ? AppTheme.emeraldAccent : AppTheme.surfaceLight).withOpacity(0.22),
+                                                      borderRadius: BorderRadius.circular(4),
+                                                      border: Border.all(
+                                                        color: isShared ? AppTheme.emeraldAccent.withOpacity(0.5) : AppTheme.border,
+                                                        width: 0.7,
+                                                      ),
+                                                    ),
+                                                    child: Text(
+                                                      isShared ? "Shared" : "Private",
+                                                      style: TextStyle(
+                                                        fontSize: 9,
+                                                        fontWeight: FontWeight.bold,
+                                                        color: isShared ? AppTheme.emeraldAccent : AppTheme.textSecondary,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ],
                                             ),
                                           ],
                                         ),

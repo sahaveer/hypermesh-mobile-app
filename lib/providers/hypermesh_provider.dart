@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -12,6 +13,7 @@ import '../services/local_media_store.dart';
 import '../services/local_mesh_server.dart';
 import '../services/local_mesh_discovery.dart';
 import '../services/background_mesh_service.dart';
+import '../services/gallery_sync_service.dart';
 import '../services/phone_download_manager.dart';
 import '../widgets/background_sharing_dialog.dart';
 import '../services/app_update_service.dart';
@@ -22,7 +24,9 @@ enum MeshFilter { all, mine, peers, favorites }
 class HypermeshProvider extends ChangeNotifier {
   final ApiService apiService;
   final LocalMediaStore localMediaStore = LocalMediaStore();
+  final GallerySyncService gallerySyncService = GallerySyncService();
   late final PhoneDownloadManager phoneDownloader;
+  Timer? _gallerySyncTimer;
 
   LocalMeshServer? _localMeshServer;
   LocalMeshDiscovery? _localMeshDiscovery;
@@ -39,6 +43,11 @@ class HypermeshProvider extends ChangeNotifier {
   final List<Song> _peerSongs = [];
   List<VideoItem> _localVideos = [];
   final List<VideoItem> _peerVideos = [];
+  List<File> _localGalleryPhotos = [];
+  List<Map<String, dynamic>> _hubPhotos = [];
+
+  List<File> get localGalleryPhotos => _localGalleryPhotos;
+  List<Map<String, dynamic>> get hubPhotos => _hubPhotos;
 
   // User Customizations & Filter State
   final Set<String> _hiddenSongIds = {};
@@ -112,6 +121,17 @@ class HypermeshProvider extends ChangeNotifier {
   bool _isBackgroundServiceEnabled = false;
   bool _serverDownloaderAvailable = false;
   bool get serverDownloaderAvailable => _serverDownloaderAvailable;
+
+  bool get isGallerySyncEnabled => gallerySyncService.isEnabled;
+  bool get gallerySyncWifiOnly => gallerySyncService.wifiOnly;
+  bool get isGallerySyncing => gallerySyncService.isSyncing;
+  int get gallerySyncedCount => gallerySyncService.syncedCount;
+  double get gallerySyncProgress => gallerySyncService.progress;
+  String get gallerySyncStatus => gallerySyncService.statusText;
+  String? _chunkedUploadStatus;
+  double _chunkedUploadProgress = 0.0;
+  String? get chunkedUploadStatus => _chunkedUploadStatus;
+  double get chunkedUploadProgress => _chunkedUploadProgress;
 
   UpdateInfo? _availableUpdate;
   UpdateInfo? get availableUpdate => _availableUpdate;
@@ -289,6 +309,7 @@ class HypermeshProvider extends ChangeNotifier {
     // 3. Load user preferences & paired-peer tokens, then refresh
     await _loadPairedTokens();
     await _loadPreferences();
+    await gallerySyncService.init();
     _isBackgroundServiceEnabled = await BackgroundMeshService.isEnabled();
     if (_isBackgroundServiceEnabled) {
       await BackgroundMeshService.startService(
@@ -296,7 +317,87 @@ class HypermeshProvider extends ChangeNotifier {
         peersCount: _peerNodes.length,
       );
     }
+    _scheduleGallerySyncTimer();
     await refreshLibrary();
+    if (gallerySyncService.isEnabled && !apiService.isDemo) {
+      unawaited(syncGalleryNow());
+    }
+  }
+
+  void _scheduleGallerySyncTimer() {
+    _gallerySyncTimer?.cancel();
+    if (!gallerySyncService.isEnabled) return;
+    _gallerySyncTimer = Timer.periodic(const Duration(minutes: 5), (_) {
+      if (gallerySyncService.isEnabled && !apiService.isDemo && !gallerySyncService.isSyncing) {
+        unawaited(syncGalleryNow());
+      }
+    });
+  }
+
+  Future<void> setGallerySyncEnabled(bool enable) async {
+    await gallerySyncService.setEnabled(enable);
+    if (enable) {
+      if (!_isBackgroundServiceEnabled && BackgroundMeshService.isSupportedPlatform) {
+        await setBackgroundServiceEnabled(true);
+      }
+      _scheduleGallerySyncTimer();
+      notifyListeners();
+      await syncGalleryNow();
+    } else {
+      _gallerySyncTimer?.cancel();
+      notifyListeners();
+    }
+  }
+
+  Future<void> setGallerySyncWifiOnly(bool wifiOnly) async {
+    await gallerySyncService.setWifiOnly(wifiOnly);
+    notifyListeners();
+  }
+
+  Future<GallerySyncResult> syncGalleryNow() async {
+    final result = await gallerySyncService.syncNow(
+      apiService: apiService,
+      clientId: _deviceId,
+      deviceName: _deviceName,
+      onUpdate: notifyListeners,
+    );
+    notifyListeners();
+    return result;
+  }
+
+  Future<Map<String, dynamic>> uploadLargeFileToHub(File file) async {
+    _chunkedUploadProgress = 0.0;
+    _chunkedUploadStatus = 'Hashing ${file.uri.pathSegments.last}...';
+    notifyListeners();
+    try {
+      final res = await apiService.uploadFileChunked(
+        file: file,
+        clientId: _deviceId,
+        deviceName: _deviceName,
+        onProgress: (sent, total) {
+          _chunkedUploadProgress = total > 0 ? sent / total : 0.0;
+          final sentMb = (sent / (1024 * 1024)).toStringAsFixed(1);
+          final totalMb = (total / (1024 * 1024)).toStringAsFixed(1);
+          _chunkedUploadStatus = 'Uploading $sentMb / $totalMb MB';
+          notifyListeners();
+        },
+      );
+      if (res['ok'] == true) {
+        _chunkedUploadProgress = 1.0;
+        _chunkedUploadStatus = res['status'] == 'duplicate'
+            ? 'Skipped duplicate (already on Hub)'
+            : (res['message']?.toString() ?? 'Upload complete!');
+        await refreshLibrary();
+      } else {
+        _chunkedUploadStatus = res['error']?.toString() ?? 'Upload failed';
+      }
+      notifyListeners();
+      return res;
+    } catch (e) {
+      _chunkedUploadStatus = 'Upload error: $e';
+      notifyListeners();
+      return {'ok': false, 'error': e.toString()};
+    }
   }
 
   void _onDiscoveredPeersChanged(List<PeerNode> discovered) {
@@ -353,8 +454,101 @@ class HypermeshProvider extends ChangeNotifier {
   }
 
   // --- FILE & FOLDER PICKER FOR SHARING ---
-  Future<({String? folderPath, int addedCount, String? error})> pickLocalFolder() async {
-    final res = await localMediaStore.pickAndAddFolder();
+  bool isFolderAutoShared(String folderPath) =>
+      localMediaStore.isFolderAutoShared(folderPath);
+
+  Future<void> setFolderAutoShare(String folderPath, bool shareEverything) async {
+    await localMediaStore.setFolderAutoShare(folderPath, shareEverything);
+    _localMeshDiscovery?.updateMediaCounts(
+      music: localMediaStore.meshSongs.length,
+      video: localMediaStore.meshVideos.length,
+    );
+    await refreshLibrary();
+    _updateBackgroundNotification();
+  }
+
+  Future<int> setFilesSharedWithMesh(Iterable<String> ids, bool shared) async {
+    final updated = await localMediaStore.setFilesSharedWithMesh(ids, shared);
+    _localMeshDiscovery?.updateMediaCounts(
+      music: localMediaStore.meshSongs.length,
+      video: localMediaStore.meshVideos.length,
+    );
+    await refreshLibrary();
+    _updateBackgroundNotification();
+    return updated;
+  }
+
+  Future<void> loadPhotos() async {
+    final localFuture = gallerySyncService.scanLocalPhotos(maxFiles: 300);
+    final hubFuture = apiService.fetchHubPhotos(limit: 200);
+    final results = await (localFuture, hubFuture).wait;
+    _localGalleryPhotos = results.$1;
+    _hubPhotos = results.$2;
+    notifyListeners();
+  }
+
+  Future<({int uploaded, int deduplicated, int pending, int failed})> uploadSelectedPhotos(
+    List<File> files, {
+    void Function(int done, int total)? onItemProgress,
+  }) async {
+    int uploaded = 0;
+    int deduplicated = 0;
+    int pending = 0;
+    int failed = 0;
+
+    final hashes = <({File file, String hash})>[];
+    for (final f in files) {
+      hashes.add((file: f, hash: await ApiService.computeFileSha256(f)));
+    }
+    final existing = await apiService.checkExistingPhotoHashes(
+      hashes.map((e) => e.hash).toList(),
+    );
+
+    final missing = <({File file, String hash})>[];
+    for (final item in hashes) {
+      if (existing.contains(item.hash)) {
+        deduplicated++;
+      } else {
+        missing.add(item);
+      }
+    }
+
+    int doneCount = deduplicated;
+    onItemProgress?.call(doneCount, files.length);
+
+    for (final item in missing) {
+      final res = await apiService.uploadFileChunked(
+        file: item.file,
+        contentHash: item.hash,
+        mediaType: 'photo',
+        clientId: _deviceId,
+        deviceName: _deviceName,
+      );
+      if (res['ok'] == true) {
+        if (res['status'] == 'duplicate') {
+          deduplicated++;
+        } else if (res['status'] == 'pending') {
+          pending++;
+        } else {
+          uploaded++;
+        }
+      } else {
+        failed++;
+      }
+      doneCount++;
+      onItemProgress?.call(doneCount, files.length);
+    }
+
+    await loadPhotos();
+    return (uploaded: uploaded, deduplicated: deduplicated, pending: pending, failed: failed);
+  }
+
+  Future<({String? folderPath, int addedCount, String? error})> pickLocalFolder({
+    bool shareEverything = false,
+  }) async {
+    final res = await localMediaStore.pickAndAddFolder(
+      shareEverything: shareEverything,
+    );
     if (res.folderPath != null) {
       _localMeshDiscovery?.updateMediaCounts(
         music: localMediaStore.meshSongs.length,
@@ -842,6 +1036,7 @@ class HypermeshProvider extends ChangeNotifier {
 
   @override
   void dispose() {
+    _gallerySyncTimer?.cancel();
     _refreshGeneration++;
     _peerSyncGeneration++;
     phoneDownloader.dispose();

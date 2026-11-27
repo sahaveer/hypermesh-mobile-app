@@ -70,6 +70,16 @@ class VideoItem {
     return "$base?t=${Uri.encodeQueryComponent(streamToken!)}";
   }
 
+  String getHlsStreamUrl(String defaultHost, {String quality = '720p'}) {
+    final host = sourceNodeHost.isNotEmpty ? sourceNodeHost : defaultHost;
+    final cleanHost = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
+    final params = <String>["quality=${Uri.encodeQueryComponent(quality)}"];
+    if (streamToken != null && streamToken!.isNotEmpty) {
+      params.add("t=${Uri.encodeQueryComponent(streamToken!)}");
+    }
+    return "$cleanHost/api/hls/$id/index.m3u8?${params.join('&')}";
+  }
+
   String get formattedDuration {
     final totalSeconds = duration.toInt();
     final hours = totalSeconds ~/ 3600;

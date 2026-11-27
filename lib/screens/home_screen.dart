@@ -10,6 +10,7 @@ import '../theme/app_theme.dart';
 import '../widgets/mini_player.dart';
 import '../widgets/song_tile.dart';
 import 'videos_screen.dart';
+import 'photos_screen.dart';
 import 'mesh_radar_screen.dart';
 import 'hub_connect_screen.dart';
 
@@ -23,6 +24,8 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
   final TextEditingController _searchController = TextEditingController();
+  bool _isSelectionMode = false;
+  final Set<String> _selectedSongIds = {};
 
   @override
   void initState() {
@@ -67,6 +70,7 @@ class _HomeScreenState extends State<HomeScreen> {
             children: [
               _buildMusicTab(),
               const VideosScreen(),
+              const PhotosScreen(),
               const MeshRadarScreen(),
               const HubConnectScreen(),
             ],
@@ -94,6 +98,11 @@ class _HomeScreenState extends State<HomeScreen> {
             icon: Icon(Icons.movie_outlined),
             activeIcon: Icon(Icons.movie),
             label: "Videos",
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.photo_library_outlined),
+            activeIcon: Icon(Icons.photo_library),
+            label: "Photos",
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.cell_tower),
@@ -125,41 +134,65 @@ class _HomeScreenState extends State<HomeScreen> {
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 10,
-                      height: 10,
-                      decoration: const BoxDecoration(
-                        color: AppTheme.cyanAccent,
-                        shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(color: AppTheme.cyanAccent, blurRadius: 8, spreadRadius: 1),
-                        ],
+                Expanded(
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 10,
+                        height: 10,
+                        decoration: const BoxDecoration(
+                          color: AppTheme.cyanAccent,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(color: AppTheme.cyanAccent, blurRadius: 8, spreadRadius: 1),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 10),
-                    const Text(
-                      "HYPERMESH",
-                      style: TextStyle(
-                        fontSize: 20,
-                        fontWeight: FontWeight.w900,
-                        letterSpacing: 2.0,
-                        color: Colors.white,
+                      const SizedBox(width: 8),
+                      const Flexible(
+                        child: Text(
+                          "HYPERMESH",
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 19,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 1.6,
+                            color: Colors.white,
+                          ),
+                        ),
                       ),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
                 // Top action buttons
                 Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
+                    if (hypermesh.localSongs.isNotEmpty) ...[
+                      IconButton(
+                        visualDensity: VisualDensity.compact,
+                        tooltip: _isSelectionMode ? "Cancel selection" : "Multi-select tracks to share",
+                        icon: Icon(
+                          _isSelectionMode ? Icons.close : Icons.checklist,
+                          color: _isSelectionMode ? Colors.orangeAccent : AppTheme.cyanAccent,
+                          size: 20,
+                        ),
+                        onPressed: () {
+                          setState(() {
+                            _isSelectionMode = !_isSelectionMode;
+                            if (!_isSelectionMode) _selectedSongIds.clear();
+                          });
+                        },
+                      ),
+                    ],
                     if (patchService.isPatchActive || hypermesh.serverDownloaderAvailable) ...[
                       IconButton(
-                        icon: const Icon(Icons.cloud_download, color: AppTheme.cyanAccent, size: 22),
+                        visualDensity: VisualDensity.compact,
+                        icon: const Icon(Icons.cloud_download, color: AppTheme.cyanAccent, size: 20),
                         tooltip: "Web Media Importer",
                         onPressed: () => ServerDownloaderDialog.show(context),
                       ),
-                      const SizedBox(width: 4),
                     ],
                     ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
@@ -172,16 +205,16 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         elevation: 0,
                       ),
-                      icon: const Icon(Icons.folder_open, size: 16),
-                      label: const Text("Folders / Add", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                      icon: const Icon(Icons.folder_open, size: 15),
+                      label: const Text("Folders / Add", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
                       onPressed: () => LocalFoldersSheet.show(context, defaultVideo: false),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     // Peer status pill
                     GestureDetector(
-                      onTap: () => setState(() => _currentIndex = 2),
+                      onTap: () => setState(() => _currentIndex = 3),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                         decoration: BoxDecoration(
                           color: AppTheme.surfaceLight,
                           borderRadius: BorderRadius.circular(20),
@@ -189,12 +222,12 @@ class _HomeScreenState extends State<HomeScreen> {
                         ),
                         child: Row(
                           children: [
-                            const Icon(Icons.wifi_tethering, size: 14, color: AppTheme.emeraldAccent),
-                            const SizedBox(width: 6),
+                            const Icon(Icons.wifi_tethering, size: 13, color: AppTheme.emeraldAccent),
+                            const SizedBox(width: 4),
                             Text(
                               "${hypermesh.peerNodes.length} Peers",
                               style: const TextStyle(
-                                fontSize: 12,
+                                fontSize: 11,
                                 fontWeight: FontWeight.bold,
                                 color: AppTheme.emeraldAccent,
                               ),
@@ -283,6 +316,56 @@ class _HomeScreenState extends State<HomeScreen> {
           ),
           const SizedBox(height: 12),
 
+          if (_isSelectionMode)
+            Container(
+              margin: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              decoration: BoxDecoration(
+                color: AppTheme.surfaceLight,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppTheme.cyanAccent.withOpacity(0.6)),
+              ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      "${_selectedSongIds.length} selected",
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 12),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: _selectedSongIds.isEmpty
+                        ? null
+                        : () async {
+                            await hypermesh.setFilesSharedWithMesh(_selectedSongIds, true);
+                            if (mounted) {
+                              setState(() {
+                                _isSelectionMode = false;
+                                _selectedSongIds.clear();
+                              });
+                              await hypermesh.checkAndPromptBackgroundSharing(context);
+                            }
+                          },
+                    child: const Text("Share", style: TextStyle(color: AppTheme.emeraldAccent, fontWeight: FontWeight.bold)),
+                  ),
+                  TextButton(
+                    onPressed: _selectedSongIds.isEmpty
+                        ? null
+                        : () async {
+                            await hypermesh.setFilesSharedWithMesh(_selectedSongIds, false);
+                            if (mounted) {
+                              setState(() {
+                                _isSelectionMode = false;
+                                _selectedSongIds.clear();
+                              });
+                            }
+                          },
+                    child: const Text("Private", style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold)),
+                  ),
+                ],
+              ),
+            ),
+
           // Songs List
           Expanded(
             child: hypermesh.isLoading
@@ -361,12 +444,38 @@ class _HomeScreenState extends State<HomeScreen> {
                           itemBuilder: (context, index) {
                             final song = songs[index];
                             final isCurrent = player.currentSong?.id == song.id;
+                            final isLocal = hypermesh.isLocalSharedMedia(song.id);
+                            final isSelected = _selectedSongIds.contains(song.id);
 
                             return SongTile(
                               song: song,
                               isCurrent: isCurrent,
                               isPlaying: player.isPlaying,
-                              onTap: () => player.playSong(song, songs),
+                              isSelectionMode: _isSelectionMode,
+                              isSelected: isSelected,
+                              onLongPress: isLocal
+                                  ? () {
+                                      setState(() {
+                                        _isSelectionMode = true;
+                                        _selectedSongIds.add(song.id);
+                                      });
+                                    }
+                                  : null,
+                              onTap: () {
+                                if (_isSelectionMode) {
+                                  if (!isLocal) return;
+                                  setState(() {
+                                    if (isSelected) {
+                                      _selectedSongIds.remove(song.id);
+                                      if (_selectedSongIds.isEmpty) _isSelectionMode = false;
+                                    } else {
+                                      _selectedSongIds.add(song.id);
+                                    }
+                                  });
+                                  return;
+                                }
+                                player.playSong(song, songs);
+                              },
                             );
                           },
                         ),

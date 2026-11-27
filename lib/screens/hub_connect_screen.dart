@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -880,6 +881,154 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
             subtitle: "Finds all audio & video in common folders (Music, Movies, Download, DCIM, WhatsApp…). New items are added hidden from the mesh by default — toggle sharing per file.",
             icon: Icons.folder_special_outlined,
             onTap: _handleScanDevice,
+          ),
+          const SizedBox(height: 24),
+          const Text(
+            "AUTO GALLERY BACKUP & CHUNKED UPLOAD",
+            style: TextStyle(
+              color: AppTheme.textSecondary,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppTheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(
+                color: hypermesh.isGallerySyncEnabled
+                    ? AppTheme.emeraldAccent.withOpacity(0.5)
+                    : AppTheme.border,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  activeColor: AppTheme.emeraldAccent,
+                  title: const Text(
+                    "Background Gallery Sync",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15, color: Colors.white),
+                  ),
+                  subtitle: Text(
+                    hypermesh.isGallerySyncEnabled
+                        ? "Auto-backs up DCIM/Pictures using SHA-256 deduplication & resumable chunks (${hypermesh.gallerySyncedCount} synced)."
+                        : "Automatically back up new photos to your Hub with hash deduplication.",
+                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                  ),
+                  value: hypermesh.isGallerySyncEnabled,
+                  onChanged: (val) => hypermesh.setGallerySyncEnabled(val),
+                ),
+                SwitchListTile.adaptive(
+                  contentPadding: EdgeInsets.zero,
+                  activeColor: AppTheme.cyanAccent,
+                  title: const Text(
+                    "Sync on Wi-Fi Only",
+                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: Colors.white),
+                  ),
+                  subtitle: const Text(
+                    "Pause automatic photo backup when on mobile data.",
+                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                  ),
+                  value: hypermesh.gallerySyncWifiOnly,
+                  onChanged: (val) => hypermesh.setGallerySyncWifiOnly(val),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  "Status: ${hypermesh.gallerySyncStatus}",
+                  style: const TextStyle(color: AppTheme.cyanAccent, fontSize: 12, fontWeight: FontWeight.w600),
+                ),
+                if (hypermesh.isGallerySyncing) ...[
+                  const SizedBox(height: 8),
+                  LinearProgressIndicator(
+                    value: hypermesh.gallerySyncProgress > 0 ? hypermesh.gallerySyncProgress : null,
+                    backgroundColor: AppTheme.surfaceLight,
+                    color: AppTheme.emeraldAccent,
+                  ),
+                ],
+                if (hypermesh.chunkedUploadStatus != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    hypermesh.chunkedUploadStatus!,
+                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 12),
+                  ),
+                  if (hypermesh.chunkedUploadProgress > 0 && hypermesh.chunkedUploadProgress < 1.0) ...[
+                    const SizedBox(height: 4),
+                    LinearProgressIndicator(
+                      value: hypermesh.chunkedUploadProgress,
+                      backgroundColor: AppTheme.surfaceLight,
+                      color: AppTheme.cyanAccent,
+                    ),
+                  ],
+                ],
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: AppTheme.emeraldAccent,
+                          side: const BorderSide(color: AppTheme.emeraldAccent),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: hypermesh.isGallerySyncing
+                            ? null
+                            : () async {
+                                final res = await hypermesh.syncGalleryNow();
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(content: Text(res.message)),
+                                  );
+                                }
+                              },
+                        icon: const Icon(Icons.sync, size: 16),
+                        label: Text(
+                          hypermesh.isGallerySyncing ? "Syncing..." : "Sync Photos Now",
+                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.cyanAccent,
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        ),
+                        onPressed: () async {
+                          final picked = await FilePicker.pickFiles();
+                          if (picked.isEmpty) return;
+                          final path = picked.first.path;
+                          if (path == null) return;
+                          final res = await hypermesh.uploadLargeFileToHub(File(path));
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  res['ok'] == true
+                                      ? (res['message']?.toString() ?? 'Chunked upload complete!')
+                                      : (res['error']?.toString() ?? 'Chunked upload failed'),
+                                ),
+                              ),
+                            );
+                          }
+                        },
+                        icon: const Icon(Icons.cloud_upload, size: 16),
+                        label: const Text(
+                          "Upload File (Chunked)",
+                          style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 24),
           const Text(

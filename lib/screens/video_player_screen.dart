@@ -32,6 +32,9 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
   bool _showControls = true;
   bool _hasError = false;
   bool _isLandscape = false;
+  String _selectedQuality = 'direct';
+  bool _triedAutoHlsFallback = false;
+  bool _isSwitchingQuality = false;
 
   // Gestures & HUD State
   _ActiveGesture _activeGesture = _ActiveGesture.none;
@@ -76,7 +79,7 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     }
   }
 
-  Future<void> _initPlayer() async {
+  Future<void> _initPlayer({String quality = 'direct', Duration? seekTo}) async {
     final localPath = widget.video.localFilePath;
     final asset = widget.video.demoAsset;
     if (asset != null) {
@@ -84,23 +87,68 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
     } else if (localPath != null && File(localPath).existsSync()) {
       _controller = VideoPlayerController.file(File(localPath));
     } else {
-      _controller = VideoPlayerController.networkUrl(
-        Uri.parse(widget.video.getStreamUrl(widget.hostUrl)),
-      );
+      final url = quality == 'direct'
+          ? widget.video.getStreamUrl(widget.hostUrl)
+          : widget.video.getHlsStreamUrl(widget.hostUrl, quality: quality);
+      _controller = VideoPlayerController.networkUrl(Uri.parse(url));
     }
     _controller.addListener(() {
       if (!mounted) return;
-      setState(() => _hasError = _controller.value.hasError);
+      if (_controller.value.hasError && !_hasError) {
+        if (!_triedAutoHlsFallback &&
+            quality == 'direct' &&
+            asset == null &&
+            localPath == null) {
+          _triedAutoHlsFallback = true;
+          _switchQuality('720p');
+          return;
+        }
+        setState(() => _hasError = true);
+      }
     });
     try {
       await _controller.initialize();
       if (!mounted) return;
-      setState(() => _isInitialized = true);
+      if (seekTo != null && seekTo > Duration.zero) {
+        await _controller.seekTo(seekTo);
+      }
+      setState(() {
+        _isInitialized = true;
+        _hasError = false;
+        _isSwitchingQuality = false;
+      });
       await _controller.play();
       if (mounted) _startHideControlsTimer();
     } catch (_) {
-      if (mounted) setState(() => _hasError = true);
+      if (!_triedAutoHlsFallback &&
+          quality == 'direct' &&
+          asset == null &&
+          localPath == null) {
+        _triedAutoHlsFallback = true;
+        await _switchQuality('720p');
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _hasError = true;
+          _isSwitchingQuality = false;
+        });
+      }
     }
+  }
+
+  Future<void> _switchQuality(String newQuality) async {
+    if (_isSwitchingQuality) return;
+    final currentPos = _isInitialized ? _controller.value.position : Duration.zero;
+    final oldController = _controller;
+    setState(() {
+      _selectedQuality = newQuality;
+      _isInitialized = false;
+      _hasError = false;
+      _isSwitchingQuality = true;
+    });
+    await oldController.dispose();
+    await _initPlayer(quality: newQuality, seekTo: currentPos);
   }
 
   @override
@@ -614,6 +662,31 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                                   "Could not stream '${widget.video.title}'",
                                   style: const TextStyle(color: Colors.white),
                                 ),
+                                if (widget.video.demoAsset == null && widget.video.localFilePath == null) ...[
+                                  const SizedBox(height: 14),
+                                  Wrap(
+                                    spacing: 10,
+                                    children: [
+                                      ElevatedButton.icon(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: AppTheme.cyanAccent,
+                                          foregroundColor: Colors.black,
+                                        ),
+                                        onPressed: () => _switchQuality('720p'),
+                                        icon: const Icon(Icons.hd, size: 18),
+                                        label: const Text("Stream 720p HLS"),
+                                      ),
+                                      OutlinedButton(
+                                        style: OutlinedButton.styleFrom(
+                                          foregroundColor: Colors.white,
+                                          side: const BorderSide(color: Colors.white54),
+                                        ),
+                                        onPressed: () => _switchQuality('480p'),
+                                        child: const Text("480p HLS"),
+                                      ),
+                                    ],
+                                  ),
+                                ],
                               ],
                             )
                           : const CircularProgressIndicator(color: AppTheme.cyanAccent),
@@ -695,6 +768,34 @@ class _VideoPlayerScreenState extends State<VideoPlayerScreen> {
                             ],
                           ),
                         ),
+                        if (widget.video.demoAsset == null && widget.video.localFilePath == null)
+                          PopupMenuButton<String>(
+                            initialValue: _selectedQuality,
+                            tooltip: "Stream Quality (Direct / HLS)",
+                            color: AppTheme.surface,
+                            onSelected: (q) {
+                              if (q != _selectedQuality) _switchQuality(q);
+                            },
+                            itemBuilder: (_) => const [
+                              PopupMenuItem(value: 'direct', child: Text('Direct Play (Original)', style: TextStyle(color: Colors.white))),
+                              PopupMenuItem(value: '720p', child: Text('HLS 720p (Fast Remote)', style: TextStyle(color: Colors.white))),
+                              PopupMenuItem(value: '480p', child: Text('HLS 480p (Data Saver)', style: TextStyle(color: Colors.white))),
+                              PopupMenuItem(value: '360p', child: Text('HLS 360p (Low Bandwidth)', style: TextStyle(color: Colors.white))),
+                            ],
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              margin: const EdgeInsets.only(right: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.black54,
+                                borderRadius: BorderRadius.circular(6),
+                                border: Border.all(color: AppTheme.cyanAccent.withOpacity(0.6)),
+                              ),
+                              child: Text(
+                                _selectedQuality == 'direct' ? 'DIRECT' : 'HLS ${_selectedQuality.toUpperCase()}',
+                                style: const TextStyle(color: AppTheme.cyanAccent, fontSize: 11, fontWeight: FontWeight.bold),
+                              ),
+                            ),
+                          ),
                         IconButton(
                           icon: Icon(
                             _isLandscape ? Icons.screen_lock_landscape : Icons.screen_rotation,

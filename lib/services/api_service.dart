@@ -1,4 +1,6 @@
 import 'dart:convert';
+import 'dart:io';
+import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/song.dart';
@@ -571,4 +573,204 @@ class ApiService {
     } catch (_) {}
     return null;
   }
+
+  /// Computes a streaming SHA-256 hex digest without buffering the entire file in RAM.
+  static Future<String> computeFileSha256(File file) async {
+    final output = _DigestSink();
+    final input = sha256.startChunkedConversion(output);
+    await for (final chunk in file.openRead()) {
+      input.add(chunk);
+    }
+    input.close();
+    return output.value.toString();
+  }
+
+  /// Fetches photos stored on the connected Hub.
+  Future<List<Map<String, dynamic>>> fetchHubPhotos({int limit = 200}) async {
+    if (isDemo) return [];
+    try {
+      final uri = Uri.parse("$hostUrl/api/photos?limit=$limit");
+      final response = await _get(uri).timeout(const Duration(seconds: 6));
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body) as Map<String, dynamic>;
+        final list = decoded['photos'] as List? ?? [];
+        return list.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  String getPhotoThumbUrl(String photoId) =>
+      "$hostUrl/api/photo/${Uri.encodeComponent(photoId)}/thumb";
+
+  String getPhotoRawUrl(String photoId) =>
+      "$hostUrl/api/photo/${Uri.encodeComponent(photoId)}";
+
+  /// Checks which photo SHA-256 hashes already exist on the connected Hub.
+  Future<Set<String>> checkExistingPhotoHashes(List<String> hashes) async {
+    if (isDemo || hashes.isEmpty) return {};
+    try {
+      final uri = Uri.parse("$hostUrl/api/upload/photos/check");
+      final response = await _post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({'hashes': hashes}),
+      ).timeout(const Duration(seconds: 15));
+      if (response.statusCode == 200) {
+        final decoded = json.decode(response.body) as Map<String, dynamic>;
+        final existing = (decoded['existing'] as List? ?? []);
+        return existing.map((e) => e.toString().toLowerCase()).toSet();
+      }
+    } catch (_) {}
+    return {};
+  }
+
+  /// Uploads any file (including 1 GB+ media) in resumable chunks with SHA-256 verification.
+  Future<Map<String, dynamic>> uploadFileChunked({
+    required File file,
+    String? contentHash,
+    String? mediaType,
+    String? clientId,
+    String? deviceName,
+    int chunkSize = 4 * 1024 * 1024,
+    void Function(int sentBytes, int totalBytes)? onProgress,
+  }) async {
+    if (isDemo) {
+      return {'ok': false, 'error': 'Connect to a personal Hypermesh Hub first.'};
+    }
+
+    final totalSize = await file.length();
+    final fileName = file.path.split(RegExp(r'[/\\]')).last;
+    final resolvedHash = contentHash ?? await computeFileSha256(file);
+
+    try {
+      final initUri = Uri.parse("$hostUrl/api/upload/chunked/init");
+      final initHeaders = <String, String>{'Content-Type': 'application/json'};
+      if (adminToken != null && adminToken!.isNotEmpty) {
+        initHeaders['x-admin-token'] = adminToken!;
+      }
+
+      final initResp = await _post(
+        initUri,
+        headers: initHeaders,
+        body: json.encode({
+          'filename': fileName,
+          'total_size': totalSize,
+          'chunk_size': chunkSize,
+          'content_hash': resolvedHash,
+          'media_type': ?mediaType,
+          'client_id': ?clientId,
+          'device_name': ?deviceName,
+        }),
+      ).timeout(const Duration(seconds: 20));
+
+      if (initResp.statusCode != 200) {
+        return {'ok': false, 'error': 'Init failed (HTTP ${initResp.statusCode})'};
+      }
+
+      final initData = json.decode(initResp.body) as Map<String, dynamic>;
+      if (initData['deduplicated'] == true || initData['status'] == 'duplicate') {
+        onProgress?.call(totalSize, totalSize);
+        return {'ok': true, 'status': 'duplicate', 'deduplicated': true, 'filename': fileName};
+      }
+
+      final uploadId = initData['upload_id']?.toString() ?? '';
+      if (uploadId.isEmpty) {
+        return {'ok': false, 'error': 'Server did not return an upload_id'};
+      }
+
+      final serverChunkSize = (initData['chunk_size'] is num)
+          ? (initData['chunk_size'] as num).toInt()
+          : chunkSize;
+      int offset = (initData['next_offset'] is num)
+          ? (initData['next_offset'] as num).toInt()
+          : 0;
+
+      onProgress?.call(offset, totalSize);
+
+      final raf = await file.open(mode: FileMode.read);
+      try {
+        while (offset < totalSize) {
+          final remaining = totalSize - offset;
+          final readLen = remaining < serverChunkSize ? remaining : serverChunkSize;
+          await raf.setPosition(offset);
+          final bytes = await raf.read(readLen);
+
+          bool chunkSent = false;
+          for (int attempt = 0; attempt < 3; attempt++) {
+            try {
+              final putUri = Uri.parse(
+                "$hostUrl/api/upload/chunked/${Uri.encodeComponent(uploadId)}?offset=$offset",
+              );
+              final putHeaders = <String, String>{
+                'Content-Type': 'application/octet-stream',
+              };
+              if (adminToken != null && adminToken!.isNotEmpty) {
+                putHeaders['x-admin-token'] = adminToken!;
+              }
+              final putResp = await (httpClient != null
+                      ? httpClient!.put(putUri, headers: putHeaders, body: bytes)
+                      : http.put(putUri, headers: putHeaders, body: bytes))
+                  .timeout(const Duration(seconds: 60));
+
+              if (putResp.statusCode == 200) {
+                final putData = json.decode(putResp.body) as Map<String, dynamic>;
+                offset = (putData['next_offset'] is num)
+                    ? (putData['next_offset'] as num).toInt()
+                    : (offset + bytes.length);
+                chunkSent = true;
+                break;
+              } else if (putResp.statusCode == 409) {
+                final expected = int.tryParse(putResp.headers['x-expected-offset'] ?? '');
+                if (expected != null) {
+                  offset = expected;
+                  chunkSent = true;
+                  break;
+                }
+              }
+            } catch (_) {
+              if (attempt == 2) rethrow;
+              await Future.delayed(Duration(milliseconds: 500 * (attempt + 1)));
+            }
+          }
+
+          if (!chunkSent) {
+            return {'ok': false, 'error': 'Chunk upload failed at offset $offset'};
+          }
+          onProgress?.call(offset, totalSize);
+        }
+      } finally {
+        await raf.close();
+      }
+
+      final completeUri = Uri.parse(
+        "$hostUrl/api/upload/chunked/${Uri.encodeComponent(uploadId)}/complete",
+      );
+      final completeHeaders = <String, String>{};
+      if (adminToken != null && adminToken!.isNotEmpty) {
+        completeHeaders['x-admin-token'] = adminToken!;
+      }
+      final completeResp = await _post(
+        completeUri,
+        headers: completeHeaders,
+      ).timeout(const Duration(seconds: 45));
+
+      if (completeResp.statusCode == 200) {
+        final done = Map<String, dynamic>.from(json.decode(completeResp.body) as Map);
+        done['ok'] = true;
+        return done;
+      }
+      return {'ok': false, 'error': 'Finalize failed (HTTP ${completeResp.statusCode})'};
+    } catch (e) {
+      return {'ok': false, 'error': 'Chunked upload error: $e'};
+    }
+  }
+}
+
+class _DigestSink implements Sink<Digest> {
+  late Digest value;
+  @override
+  void add(Digest data) => value = data;
+  @override
+  void close() {}
 }

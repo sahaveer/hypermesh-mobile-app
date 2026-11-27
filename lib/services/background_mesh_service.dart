@@ -84,6 +84,16 @@ class BackgroundMeshService {
     }
   }
 
+  static Future<bool> isWifiConnected() async {
+    if (!isSupportedPlatform) return true;
+    try {
+      final isWifi = await _channel.invokeMethod<bool>('isWifiConnected');
+      return isWifi ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
   static Future<String?> getAppSourceApkPath() async {
     if (!isSupportedPlatform) return null;
     try {
