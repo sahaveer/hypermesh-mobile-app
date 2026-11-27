@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 class BackgroundMeshService {
   static const MethodChannel _channel = MethodChannel('com.hypermesh.player/background_service');
+  static const MethodChannel _shareChannel = MethodChannel('com.hypermesh.player/share_intent');
   static const String _keyEnabled = 'background_sharing_enabled_v1';
   static const String _keyAsked = 'background_sharing_asked_v1';
 
@@ -103,5 +104,58 @@ class BackgroundMeshService {
       debugPrint("Error launching APK install: $e");
       return false;
     }
+  }
+
+  static Future<void> showDownloadProgress({
+    required String id,
+    required String title,
+    required int progress,
+    required String detail,
+  }) async {
+    if (!isSupportedPlatform) return;
+    try {
+      await _channel.invokeMethod<bool>('showDownloadProgress', {
+        'id': id,
+        'title': title,
+        'progress': progress,
+        'detail': detail,
+      });
+    } catch (_) {}
+  }
+
+  static Future<void> showDownloadComplete({
+    required String id,
+    required String title,
+    required bool success,
+    required String message,
+  }) async {
+    if (!isSupportedPlatform) return;
+    try {
+      await _channel.invokeMethod<bool>('showDownloadComplete', {
+        'id': id,
+        'title': title,
+        'success': success,
+        'message': message,
+      });
+    } catch (_) {}
+  }
+
+  static Future<String?> getInitialSharedText() async {
+    if (!isSupportedPlatform) return null;
+    try {
+      return await _shareChannel.invokeMethod<String>('getInitialSharedText');
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static void listenForSharedText(void Function(String text) onSharedText) {
+    if (!isSupportedPlatform) return;
+    _shareChannel.setMethodCallHandler((call) async {
+      if (call.method == 'onSharedText' && call.arguments is String) {
+        final text = (call.arguments as String).trim();
+        if (text.isNotEmpty) onSharedText(text);
+      }
+    });
   }
 }

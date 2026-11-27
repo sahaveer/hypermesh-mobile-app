@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/hypermesh_provider.dart';
 import '../providers/player_provider.dart';
+import '../services/background_mesh_service.dart';
 import '../services/extension_patch_service.dart';
 import '../widgets/server_downloader_dialog.dart';
 import '../widgets/local_folders_sheet.dart';
@@ -22,6 +23,31 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
   final TextEditingController _searchController = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _initShareReceiver();
+  }
+
+  Future<void> _initShareReceiver() async {
+    BackgroundMeshService.listenForSharedText(_handleIncomingSharedText);
+    final initial = await BackgroundMeshService.getInitialSharedText();
+    if (initial != null && initial.trim().isNotEmpty && mounted) {
+      _handleIncomingSharedText(initial);
+    }
+  }
+
+  void _handleIncomingSharedText(String sharedText) {
+    if (!mounted) return;
+    final match = RegExp(r'https?://\S+', caseSensitive: false).firstMatch(sharedText);
+    final candidate = match?.group(0) ?? sharedText.trim();
+    if (candidate.isEmpty) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ServerDownloaderDialog.show(context, initialUrl: candidate);
+    });
+  }
 
   @override
   void dispose() {

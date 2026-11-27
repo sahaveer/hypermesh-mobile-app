@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -11,6 +12,7 @@ import '../services/local_media_store.dart';
 import '../services/local_mesh_server.dart';
 import '../services/local_mesh_discovery.dart';
 import '../services/background_mesh_service.dart';
+import '../services/phone_download_manager.dart';
 import '../widgets/background_sharing_dialog.dart';
 import '../services/app_update_service.dart';
 import '../config/app_config.dart';
@@ -20,6 +22,7 @@ enum MeshFilter { all, mine, peers, favorites }
 class HypermeshProvider extends ChangeNotifier {
   final ApiService apiService;
   final LocalMediaStore localMediaStore = LocalMediaStore();
+  late final PhoneDownloadManager phoneDownloader;
 
   LocalMeshServer? _localMeshServer;
   LocalMeshDiscovery? _localMeshDiscovery;
@@ -49,6 +52,31 @@ class HypermeshProvider extends ChangeNotifier {
   bool _isLoading = false;
 
   HypermeshProvider({required this.apiService}) {
+    phoneDownloader = PhoneDownloadManager(
+      onNotifyProgress: (id, title, progress, detail) =>
+          BackgroundMeshService.showDownloadProgress(
+        id: id,
+        title: title,
+        progress: progress,
+        detail: detail,
+      ),
+      onNotifyComplete: (id, title, success, message) =>
+          BackgroundMeshService.showDownloadComplete(
+        id: id,
+        title: title,
+        success: success,
+        message: message,
+      ),
+      onFileCompleted: (task) async {
+        await localMediaStore.registerDownloadedFile(
+          id: task.id,
+          file: File(task.filePath),
+          isVideo: task.isVideo,
+        );
+        _refreshLocalMediaCounts();
+        await refreshLibrary();
+      },
+    );
     _initStandaloneMesh();
   }
 
@@ -824,6 +852,7 @@ class HypermeshProvider extends ChangeNotifier {
   void dispose() {
     _refreshGeneration++;
     _peerSyncGeneration++;
+    phoneDownloader.dispose();
     _localMeshServer?.stop();
     _localMeshDiscovery?.stop();
     super.dispose();

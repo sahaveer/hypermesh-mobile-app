@@ -286,66 +286,14 @@ class LocalMeshServer {
       return;
     }
 
-    final fileSize = await file.length();
-    final rangeHeader = request.headers.value(HttpHeaders.rangeHeader);
-    final contentType = _getContentType(item.name, item.isVideo);
-
-    if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
-      // Parse Range: bytes=start-end
-      final parts = rangeHeader.substring(6).split('-');
-      final startStr = parts[0].trim();
-      final endStr = parts.length > 1 ? parts[1].trim() : '';
-
-      int start = int.tryParse(startStr) ?? 0;
-      int end = endStr.isNotEmpty ? (int.tryParse(endStr) ?? (fileSize - 1)) : (fileSize - 1);
-
-      if (start >= fileSize) {
-        request.response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
-        request.response.headers.set(HttpHeaders.contentRangeHeader, 'bytes */$fileSize');
-        await request.response.close();
-        return;
-      }
-
-      end = min(end, fileSize - 1);
-      final chunkLength = end - start + 1;
-
-      request.response.statusCode = HttpStatus.partialContent;
-      request.response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
-      request.response.headers.set(HttpHeaders.contentRangeHeader, 'bytes $start-$end/$fileSize');
-      request.response.headers.contentLength = chunkLength;
-      request.response.headers.contentType = contentType;
-
-      // Pipe exact byte range to response
-      final raf = await file.open(mode: FileMode.read);
-      try {
-        await raf.setPosition(start);
-        int remaining = chunkLength;
-        const bufferSize = 64 * 1024; // 64 KB chunks
-
-        while (remaining > 0) {
-          final toRead = min(remaining, bufferSize);
-          final chunk = await raf.read(toRead);
-          if (chunk.isEmpty) break;
-          request.response.add(chunk);
-          remaining -= chunk.length;
-        }
-        await request.response.flush();
-      } finally {
-        await raf.close();
-      }
-      await request.response.close();
-    } else {
-      // Full file response
-      request.response.statusCode = HttpStatus.ok;
-      request.response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
-      request.response.headers.contentLength = fileSize;
-      request.response.headers.contentType = contentType;
-
-      await file.openRead().pipe(request.response);
-    }
+    await _serveFileWithRangeSupport(
+      request,
+      file,
+      _getContentType(item.name, item.isVideo),
+    );
   }
 
-  /// Download endpoint for 1-tap peer pinning
+  /// Download endpoint for 1-tap peer pinning (supports HTTP 206 Range resume & chunking)
   Future<void> _handleDownload(HttpRequest request, String id) async {
     final item = mediaStore.getFileById(id);
     if (item == null || !item.sharedWithMesh) {
@@ -361,13 +309,85 @@ class LocalMeshServer {
       return;
     }
 
-    final fileSize = await file.length();
-    request.response.statusCode = HttpStatus.ok;
-    request.response.headers.contentLength = fileSize;
-    request.response.headers.set('content-disposition', 'attachment; filename="${item.name}"');
-    request.response.headers.contentType = ContentType.binary;
+    await _serveFileWithRangeSupport(
+      request,
+      file,
+      ContentType.binary,
+      attachmentFilename: item.name,
+    );
+  }
 
-    await file.openRead().pipe(request.response);
+  Future<void> _serveFileWithRangeSupport(
+    HttpRequest request,
+    File file,
+    ContentType contentType, {
+    String? attachmentFilename,
+  }) async {
+    final fileSize = await file.length();
+    final rangeHeader = request.headers.value(HttpHeaders.rangeHeader);
+
+    request.response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
+    if (attachmentFilename != null) {
+      final safe = attachmentFilename.replaceAll('"', '');
+      request.response.headers.set('content-disposition', 'attachment; filename="$safe"');
+    }
+
+    if (request.method == 'HEAD') {
+      request.response.statusCode = HttpStatus.ok;
+      request.response.headers.contentLength = fileSize;
+      request.response.headers.contentType = contentType;
+      await request.response.close();
+      return;
+    }
+
+    if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
+      final parts = rangeHeader.substring(6).split('-');
+      final startStr = parts[0].trim();
+      final endStr = parts.length > 1 ? parts[1].trim() : '';
+
+      int start = int.tryParse(startStr) ?? 0;
+      int end = endStr.isNotEmpty ? (int.tryParse(endStr) ?? (fileSize - 1)) : (fileSize - 1);
+
+      if (start < 0 || start >= fileSize || end < start) {
+        request.response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+        request.response.headers.set(HttpHeaders.contentRangeHeader, 'bytes */$fileSize');
+        await request.response.close();
+        return;
+      }
+
+      end = min(end, fileSize - 1);
+      final chunkLength = end - start + 1;
+
+      request.response.statusCode = HttpStatus.partialContent;
+      request.response.headers.set(HttpHeaders.contentRangeHeader, 'bytes $start-$end/$fileSize');
+      request.response.headers.contentLength = chunkLength;
+      request.response.headers.contentType = contentType;
+
+      final raf = await file.open(mode: FileMode.read);
+      try {
+        await raf.setPosition(start);
+        int remaining = chunkLength;
+        const bufferSize = 64 * 1024;
+
+        while (remaining > 0) {
+          final toRead = min(remaining, bufferSize);
+          final chunk = await raf.read(toRead);
+          if (chunk.isEmpty) break;
+          request.response.add(chunk);
+          remaining -= chunk.length;
+        }
+        await request.response.flush();
+      } finally {
+        await raf.close();
+      }
+      await request.response.close();
+    } else {
+      request.response.statusCode = HttpStatus.ok;
+      request.response.headers.contentLength = fileSize;
+      request.response.headers.contentType = contentType;
+
+      await file.openRead().pipe(request.response);
+    }
   }
 
   ContentType _getContentType(String fileName, bool isVideo) {

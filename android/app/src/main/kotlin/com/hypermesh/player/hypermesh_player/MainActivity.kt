@@ -1,10 +1,15 @@
 package com.hypermesh.player.hypermesh_player
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.os.Build
+import android.os.Bundle
 import android.view.WindowManager
+import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -14,9 +19,82 @@ import java.io.File
 class MainActivity : FlutterActivity() {
     private val CHANNEL = "com.hypermesh.player/background_service"
     private val DEVICE_CHANNEL = "com.hypermesh.player/device_controls"
+    private val SHARE_CHANNEL = "com.hypermesh.player/share_intent"
+    private val DOWNLOAD_CHANNEL_ID = "hypermesh_downloads"
+    private val DOWNLOAD_ALERT_CHANNEL_ID = "hypermesh_download_alerts"
+
+    private var pendingSharedText: String? = null
+    private var shareChannel: MethodChannel? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        extractSharedText(intent)?.let { pendingSharedText = it }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        extractSharedText(intent)?.let { shared ->
+            pendingSharedText = shared
+            shareChannel?.invokeMethod("onSharedText", shared)
+        }
+    }
+
+    private fun extractSharedText(intent: Intent?): String? {
+        if (intent?.action != Intent.ACTION_SEND) return null
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
+        return if (!text.isNullOrEmpty()) text else null
+    }
+
+    private fun ensureDownloadNotificationChannels() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val progressChannel = NotificationChannel(
+                DOWNLOAD_CHANNEL_ID,
+                "Downloads Progress",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Shows active media download progress."
+                setShowBadge(false)
+            }
+            val alertChannel = NotificationChannel(
+                DOWNLOAD_ALERT_CHANNEL_ID,
+                "Download Alerts",
+                NotificationManager.IMPORTANCE_DEFAULT
+            ).apply {
+                description = "Notifies when a download finishes or fails."
+            }
+            manager.createNotificationChannel(progressChannel)
+            manager.createNotificationChannel(alertChannel)
+        }
+    }
+
+    private fun buildAppLaunchPendingIntent(): PendingIntent? {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: return null
+        launchIntent.flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+        return PendingIntent.getActivity(
+            this,
+            2,
+            launchIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+    }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+
+        shareChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SHARE_CHANNEL).apply {
+            setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getInitialSharedText" -> {
+                        val text = pendingSharedText
+                        pendingSharedText = null
+                        result.success(text)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        }
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, DEVICE_CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
@@ -140,6 +218,52 @@ class MainActivity : FlutterActivity() {
                         result.success(apkPath)
                     } catch (e: Exception) {
                         result.error("ERROR", e.message, null)
+                    }
+                }
+                "showDownloadProgress" -> {
+                    val id = call.argument<String>("id") ?: "dl"
+                    val title = call.argument<String>("title") ?: "Downloading..."
+                    val progress = (call.argument<Int>("progress") ?: 0).coerceIn(0, 100)
+                    val detail = call.argument<String>("detail") ?: "$progress%"
+                    try {
+                        ensureDownloadNotificationChannels()
+                        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        val notif = NotificationCompat.Builder(this, DOWNLOAD_CHANNEL_ID)
+                            .setContentTitle(title)
+                            .setContentText(detail)
+                            .setSmallIcon(R.mipmap.ic_launcher)
+                            .setOngoing(true)
+                            .setOnlyAlertOnce(true)
+                            .setProgress(100, progress, progress == 0)
+                            .setContentIntent(buildAppLaunchPendingIntent())
+                            .setPriority(NotificationCompat.PRIORITY_LOW)
+                            .build()
+                        manager.notify(id.hashCode(), notif)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
+                }
+                "showDownloadComplete" -> {
+                    val id = call.argument<String>("id") ?: "dl"
+                    val title = call.argument<String>("title") ?: "Download"
+                    val success = call.argument<Boolean>("success") ?: true
+                    val message = call.argument<String>("message") ?: if (success) "Completed" else "Failed"
+                    try {
+                        ensureDownloadNotificationChannels()
+                        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                        val notif = NotificationCompat.Builder(this, DOWNLOAD_ALERT_CHANNEL_ID)
+                            .setContentTitle(if (success) "Downloaded: $title" else "Failed: $title")
+                            .setContentText(message)
+                            .setSmallIcon(R.mipmap.ic_launcher)
+                            .setAutoCancel(true)
+                            .setContentIntent(buildAppLaunchPendingIntent())
+                            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                            .build()
+                        manager.notify(id.hashCode(), notif)
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
                     }
                 }
                 "installApk" -> {

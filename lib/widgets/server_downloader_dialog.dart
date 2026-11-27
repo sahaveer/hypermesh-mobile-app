@@ -7,18 +7,22 @@ import '../models/video_item.dart';
 import '../providers/hypermesh_provider.dart';
 import '../providers/player_provider.dart';
 import '../screens/video_player_screen.dart';
+import '../services/background_mesh_service.dart';
+import '../services/phone_download_manager.dart';
 import '../theme/app_theme.dart';
 import 'now_playing_sheet.dart';
 
 class ServerDownloaderDialog extends StatefulWidget {
-  const ServerDownloaderDialog({super.key});
+  final String? initialUrl;
 
-  static Future<void> show(BuildContext context) {
+  const ServerDownloaderDialog({super.key, this.initialUrl});
+
+  static Future<void> show(BuildContext context, {String? initialUrl}) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => const ServerDownloaderDialog(),
+      builder: (_) => ServerDownloaderDialog(initialUrl: initialUrl),
     );
   }
 
@@ -28,9 +32,16 @@ class ServerDownloaderDialog extends StatefulWidget {
 
 class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
   final TextEditingController _urlController = TextEditingController();
+  final TextEditingController _clipStartController = TextEditingController();
+  final TextEditingController _clipEndController = TextEditingController();
+  final TextEditingController _proxyController = TextEditingController();
   String _selectedFormat = "audio"; // "audio" or "video"
-  String _selectedQuality = "best"; // "best", "1080p", "720p"
-  String _selectedDestination = "server"; // "server" or "client"
+  String _selectedQuality = "best"; // "best", "4k", "1080p", "720p"
+  String _selectedDestination = "server"; // "server", "client", or "phone_direct"
+  bool _downloadPlaylist = false;
+  bool _downloadSubtitles = false;
+  bool _showAdvanced = false;
+  String? _clipboardSuggestion;
   bool _isSubmitting = false;
   bool _isSearching = false;
   String? _statusFeedback;
@@ -44,6 +55,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
   String _lastSearchQuery = '';
 
   final Set<String> _knownCompletedIds = {};
+  final Set<String> _knownFailedIds = {};
   final Set<String> _requestedClientTaskIds = {};
   final Set<String> _autoPlayTaskIds = {};
   final Set<String> _savingTaskIds = {};
@@ -53,16 +65,43 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
   @override
   void initState() {
     super.initState();
+    final hypermesh = context.read<HypermeshProvider>();
+    hypermesh.phoneDownloader.init();
+    if (widget.initialUrl != null && widget.initialUrl!.trim().isNotEmpty) {
+      final clean = widget.initialUrl!.trim();
+      _urlController.text = clean;
+      if (PhoneDownloadManager.isDirectDownloadUrl(clean) && !hypermesh.serverDownloaderAvailable) {
+        _selectedDestination = "phone_direct";
+      }
+    } else {
+      _detectClipboardLink();
+    }
     _fetchTasks();
     _pollingTimer = Timer.periodic(const Duration(milliseconds: 1500), (_) {
       _fetchTasks();
     });
   }
 
+  Future<void> _detectClipboardLink() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim() ?? '';
+      if (!mounted || text.isEmpty) return;
+      if (_isMediaUrl(text) && text != _urlController.text.trim()) {
+        setState(() {
+          _clipboardSuggestion = text;
+        });
+      }
+    } catch (_) {}
+  }
+
   @override
   void dispose() {
     _pollingTimer?.cancel();
     _urlController.dispose();
+    _clipStartController.dispose();
+    _clipEndController.dispose();
+    _proxyController.dispose();
     super.dispose();
   }
 
@@ -78,12 +117,31 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
     for (final task in tasks) {
       final id = task['id']?.toString() ?? '';
       final status = (task['status'] as String? ?? '').toLowerCase();
+      final title = task['title']?.toString() ?? 'Download';
       final isDone = status == 'completed' || status == 'finished';
+      final isErr = status == 'failed' || status == 'error';
+      if (id.isNotEmpty && isErr && !_knownFailedIds.contains(id)) {
+        _knownFailedIds.add(id);
+        if (_initialLoadDone) {
+          BackgroundMeshService.showDownloadComplete(
+            id: id,
+            title: title,
+            success: false,
+            message: task['error']?.toString() ?? 'Server download failed',
+          );
+        }
+      }
       if (id.isEmpty || !isDone) continue;
 
       if (!_knownCompletedIds.contains(id)) {
         _knownCompletedIds.add(id);
         if (_initialLoadDone) {
+          BackgroundMeshService.showDownloadComplete(
+            id: id,
+            title: title,
+            success: true,
+            message: 'Ready on ${(task['destination'] ?? 'server') == 'client' ? 'phone' : 'server'}',
+          );
           final dest = (task['destination'] as String? ?? 'server').toLowerCase();
           if (dest == 'server') {
             shouldRefreshLibrary = true;
@@ -328,13 +386,43 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
     bool clearInput = false,
   }) async {
     final dest = destinationOverride ?? _selectedDestination;
+    final hypermesh = context.read<HypermeshProvider>();
+
+    if (dest == 'phone_direct') {
+      setState(() {
+        _isSubmitting = true;
+        _statusFeedback = null;
+        _feedbackIsError = false;
+      });
+      try {
+        await hypermesh.phoneDownloader.startDownload(
+          url,
+          isVideo: _selectedFormat == 'video',
+        );
+        if (!mounted) return;
+        setState(() {
+          _isSubmitting = false;
+          if (clearInput) _urlController.clear();
+          _feedbackIsError = false;
+          _statusFeedback = "Direct phone download started!";
+        });
+      } catch (e) {
+        if (!mounted) return;
+        setState(() {
+          _isSubmitting = false;
+          _feedbackIsError = true;
+          _statusFeedback = "Could not start direct phone download: $e";
+        });
+      }
+      return;
+    }
+
     setState(() {
       _isSubmitting = true;
       _statusFeedback = null;
       _feedbackIsError = false;
     });
 
-    final hypermesh = context.read<HypermeshProvider>();
     final res = await hypermesh.apiService.startServerDownload(
       url: url,
       format: _selectedFormat,
@@ -342,6 +430,11 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
       destination: dest,
       clientId: hypermesh.deviceId,
       deviceName: hypermesh.deviceName,
+      clipStart: _clipStartController.text.trim(),
+      clipEnd: _clipEndController.text.trim(),
+      subtitles: _downloadSubtitles,
+      downloadPlaylist: _downloadPlaylist,
+      proxy: _proxyController.text.trim(),
     );
 
     if (!mounted) return;
@@ -452,13 +545,72 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
     await _fetchTasks();
   }
 
+  Future<void> _editTask(Map<String, dynamic> task) async {
+    final taskId = task['id']?.toString() ?? '';
+    if (taskId.isEmpty) return;
+    final urlCtrl = TextEditingController(text: task['url']?.toString() ?? '');
+    final proxyCtrl = TextEditingController(text: task['proxy']?.toString() ?? '');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        title: const Text('Edit Download Task', style: TextStyle(fontSize: 16)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: urlCtrl,
+              decoration: const InputDecoration(labelText: 'Download URL'),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: proxyCtrl,
+              decoration: const InputDecoration(labelText: 'Optional Proxy (http://host:port)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          ElevatedButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (confirmed == true && mounted) {
+      final hypermesh = context.read<HypermeshProvider>();
+      final ok = await hypermesh.apiService.editDownload(
+        taskId,
+        url: urlCtrl.text.trim(),
+        proxy: proxyCtrl.text.trim(),
+      );
+      if (mounted) {
+        setState(() {
+          _feedbackIsError = !ok;
+          _statusFeedback = ok ? 'Download task updated.' : 'Could not update download task.';
+        });
+      }
+      await _fetchTasks();
+    }
+    urlCtrl.dispose();
+    proxyCtrl.dispose();
+  }
+
   Future<void> _pasteFromClipboard() async {
     final data = await Clipboard.getData(Clipboard.kTextPlain);
     if (data?.text != null && mounted) {
       setState(() {
         _urlController.text = data!.text!.trim();
+        _clipboardSuggestion = null;
       });
     }
+  }
+
+  String _formatBytes(num? bytes) {
+    final b = (bytes ?? 0).toDouble();
+    if (b <= 0) return '';
+    if (b < 1024) return '${b.toInt()} B';
+    if (b < 1024 * 1024) return '${(b / 1024).toStringAsFixed(1)} KB';
+    if (b < 1024 * 1024 * 1024) return '${(b / (1024 * 1024)).toStringAsFixed(1)} MB';
+    return '${(b / (1024 * 1024 * 1024)).toStringAsFixed(2)} GB';
   }
 
   String _formatDuration(dynamic sec) {
@@ -566,6 +718,41 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
               ),
             ),
           ),
+          if (_clipboardSuggestion != null) ...[
+            const SizedBox(height: 8),
+            InkWell(
+              onTap: () {
+                setState(() {
+                  _urlController.text = _clipboardSuggestion!;
+                  _clipboardSuggestion = null;
+                });
+              },
+              borderRadius: BorderRadius.circular(10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: BoxDecoration(
+                  color: AppTheme.cyanAccent.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: AppTheme.cyanAccent.withOpacity(0.5)),
+                ),
+                child: Row(
+                  children: [
+                    const Icon(Icons.link, size: 16, color: AppTheme.cyanAccent),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        "Clipboard link: $_clipboardSuggestion",
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(fontSize: 11, color: AppTheme.cyanAccent),
+                      ),
+                    ),
+                    const Text("Tap to fill", style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: Colors.white)),
+                  ],
+                ),
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
 
           // Format Selectors (Audio vs Video)
@@ -597,14 +784,21 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                   icon: Icons.hd,
                   onTap: () => setState(() => _selectedQuality = "best"),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
+                _buildChoiceChip(
+                  selected: _selectedQuality == "4k",
+                  label: "4K",
+                  icon: Icons.four_k,
+                  onTap: () => setState(() => _selectedQuality = "4k"),
+                ),
+                const SizedBox(width: 6),
                 _buildChoiceChip(
                   selected: _selectedQuality == "1080p",
                   label: "1080p",
                   icon: Icons.high_quality,
                   onTap: () => setState(() => _selectedQuality = "1080p"),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 _buildChoiceChip(
                   selected: _selectedQuality == "720p",
                   label: "720p",
@@ -616,7 +810,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
           ],
           const SizedBox(height: 10),
 
-          // Destination Selector (Server Library vs This Phone)
+          // Destination Selector (Server Library vs Server->Phone vs Direct Phone HTTP/M3U8)
           Row(
             children: [
               _buildChoiceChip(
@@ -626,7 +820,7 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                 accent: AppTheme.purpleAccent,
                 onTap: () => setState(() => _selectedDestination = "server"),
               ),
-              const SizedBox(width: 10),
+              const SizedBox(width: 6),
               _buildChoiceChip(
                 selected: _selectedDestination == "client",
                 label: "Download to Phone",
@@ -634,8 +828,102 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                 accent: AppTheme.emeraldAccent,
                 onTap: () => setState(() => _selectedDestination = "client"),
               ),
+              const SizedBox(width: 6),
+              _buildChoiceChip(
+                selected: _selectedDestination == "phone_direct",
+                label: "Direct/M3U8",
+                icon: Icons.bolt,
+                accent: AppTheme.cyanAccent,
+                onTap: () => setState(() => _selectedDestination = "phone_direct"),
+              ),
             ],
           ),
+          if (_selectedDestination != "phone_direct") ...[
+            const SizedBox(height: 6),
+            InkWell(
+              onTap: () => setState(() => _showAdvanced = !_showAdvanced),
+              child: Row(
+                children: [
+                  Icon(_showAdvanced ? Icons.expand_less : Icons.tune, size: 15, color: AppTheme.textSecondary),
+                  const SizedBox(width: 6),
+                  Text(
+                    _showAdvanced ? "Hide Advanced Options" : "Advanced (Playlist, Clip Trim, Subtitles, Proxy)",
+                    style: const TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+            if (_showAdvanced) ...[
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text("Playlist", style: TextStyle(fontSize: 12)),
+                      value: _downloadPlaylist,
+                      onChanged: (v) => setState(() => _downloadPlaylist = v ?? false),
+                    ),
+                  ),
+                  Expanded(
+                    child: CheckboxListTile(
+                      dense: true,
+                      contentPadding: EdgeInsets.zero,
+                      controlAffinity: ListTileControlAffinity.leading,
+                      title: const Text("Subtitles", style: TextStyle(fontSize: 12)),
+                      value: _downloadSubtitles,
+                      onChanged: (v) => setState(() => _downloadSubtitles = v ?? false),
+                    ),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _clipStartController,
+                      style: const TextStyle(fontSize: 12),
+                      decoration: const InputDecoration(
+                        hintText: "Clip start (0:30)",
+                        isDense: true,
+                        filled: true,
+                        fillColor: AppTheme.surfaceLight,
+                        border: OutlineInputBorder(borderSide: BorderSide.none),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: TextField(
+                      controller: _clipEndController,
+                      style: const TextStyle(fontSize: 12),
+                      decoration: const InputDecoration(
+                        hintText: "Clip end (1:45)",
+                        isDense: true,
+                        filled: true,
+                        fillColor: AppTheme.surfaceLight,
+                        border: OutlineInputBorder(borderSide: BorderSide.none),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 6),
+              TextField(
+                controller: _proxyController,
+                style: const TextStyle(fontSize: 12),
+                decoration: const InputDecoration(
+                  hintText: "Optional proxy (http://host:port)",
+                  isDense: true,
+                  filled: true,
+                  fillColor: AppTheme.surfaceLight,
+                  border: OutlineInputBorder(borderSide: BorderSide.none),
+                ),
+              ),
+            ],
+          ],
           const SizedBox(height: 10),
 
           // Search & Download Buttons
@@ -677,7 +965,11 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                   label: Text(
                     _isSubmitting
                         ? "Starting..."
-                        : (_selectedDestination == "client" ? "Download to Phone" : "Start Server Download"),
+                        : (_selectedDestination == "client"
+                            ? "Download to Phone"
+                            : _selectedDestination == "phone_direct"
+                                ? "Direct Download"
+                                : "Start Server Download"),
                     style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
                   ),
                 ),
@@ -938,12 +1230,21 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                     final dest = (task['destination'] as String? ?? 'server').toLowerCase();
                     final errorMsg = (task['error'] as String?)?.trim();
                     final songId = task['song_id']?.toString() ?? '';
+                    final speedNum = task['speed'] is num ? (task['speed'] as num) : 0;
+                    final etaNum = task['eta'] is num ? (task['eta'] as num).toInt() : null;
+                    final dlBytes = task['downloaded_bytes'] is num ? (task['downloaded_bytes'] as num) : 0;
+                    final totalBytes = task['total_bytes'] is num ? (task['total_bytes'] as num) : 0;
                     final isFinished = status == "finished" || status == "completed";
                     final isError = status == "error" || status == "failed";
                     final isPaused = status == "paused";
+                    final isQueued = status == "queued";
                     final isActive = !isFinished && !isError && !isPaused;
                     final isSaving = _savingTaskIds.contains(taskId);
                     final isSaved = _savedTaskIds.contains(taskId);
+                    final speedLabel = _formatBytes(speedNum);
+                    final sizeLabel = (dlBytes > 0 && totalBytes > 0)
+                        ? '${_formatBytes(dlBytes)} / ${_formatBytes(totalBytes)}'
+                        : '';
 
                     return Container(
                       margin: const EdgeInsets.only(bottom: 8),
@@ -996,9 +1297,11 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                                     ? "Failed"
                                     : isPaused
                                         ? "Paused ${progress.toInt()}%"
-                                        : isFinished
-                                            ? "100%"
-                                            : "${progress.toInt()}%",
+                                        : isQueued
+                                            ? "Queued"
+                                            : isFinished
+                                                ? "100%"
+                                                : "${progress.toInt()}%",
                                 style: TextStyle(
                                   fontSize: 11,
                                   fontWeight: FontWeight.bold,
@@ -1019,13 +1322,21 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                                   constraints: const BoxConstraints(),
                                   onPressed: () => _pauseTask(taskId),
                                 ),
-                              if (isPaused)
+                              if (isPaused || isError)
                                 IconButton(
                                   tooltip: "Resume download",
                                   icon: const Icon(Icons.play_arrow, size: 18, color: AppTheme.emeraldAccent),
                                   padding: const EdgeInsets.symmetric(horizontal: 4),
                                   constraints: const BoxConstraints(),
                                   onPressed: () => _resumeTask(taskId),
+                                ),
+                              if (isPaused || isError || isQueued)
+                                IconButton(
+                                  tooltip: "Edit URL or proxy",
+                                  icon: const Icon(Icons.edit, size: 16, color: AppTheme.cyanAccent),
+                                  padding: const EdgeInsets.symmetric(horizontal: 4),
+                                  constraints: const BoxConstraints(),
+                                  onPressed: () => _editTask(task),
                                 ),
                               IconButton(
                                 tooltip: "Delete download",
@@ -1036,6 +1347,17 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                               ),
                             ],
                           ),
+                          if (sizeLabel.isNotEmpty || speedLabel.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              [
+                                if (sizeLabel.isNotEmpty) sizeLabel,
+                                if (speedLabel.isNotEmpty) '$speedLabel/s',
+                                if (etaNum != null && etaNum > 0) 'ETA ${etaNum}s',
+                              ].join(' • '),
+                              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 10),
+                            ),
+                          ],
                           const SizedBox(height: 6),
                           LinearProgressIndicator(
                             value: isFinished ? 1.0 : (progress / 100.0).clamp(0.0, 1.0),
@@ -1050,7 +1372,18 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                             minHeight: 4,
                           ),
                           if (isError && errorMsg != null && errorMsg.isNotEmpty) ...[
-                            const SizedBox(height: 6),
+                            if (sizeLabel.isNotEmpty || speedLabel.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              [
+                                if (sizeLabel.isNotEmpty) sizeLabel,
+                                if (speedLabel.isNotEmpty) '$speedLabel/s',
+                                if (etaNum != null && etaNum > 0) 'ETA ${etaNum}s',
+                              ].join(' • '),
+                              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 10),
+                            ),
+                          ],
+                          const SizedBox(height: 6),
                             Text(
                               errorMsg,
                               style: const TextStyle(color: Colors.redAccent, fontSize: 11),
@@ -1108,6 +1441,112 @@ class _ServerDownloaderDialogState extends State<ServerDownloaderDialog> {
                       ),
                     );
                   }),
+                Consumer<HypermeshProvider>(
+                  builder: (_, hm, _) {
+                    final localTasks = hm.phoneDownloader.tasks;
+                    if (localTasks.isEmpty) return const SizedBox.shrink();
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Divider(color: AppTheme.border),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Text(
+                              "ON-DEVICE DIRECT / M3U8 (${localTasks.length})",
+                              style: const TextStyle(
+                                color: AppTheme.cyanAccent,
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.2,
+                              ),
+                            ),
+                            TextButton(
+                              onPressed: () => hm.phoneDownloader.clearFinished(),
+                              child: const Text("Clear Finished", style: TextStyle(color: AppTheme.cyanAccent, fontSize: 12)),
+                            ),
+                          ],
+                        ),
+                        ...localTasks.map((lt) {
+                          final isDone = lt.status == 'completed';
+                          final isErr = lt.status == 'failed';
+                          final isPaused = lt.status == 'paused';
+                          final isActive = lt.status == 'downloading' || lt.status == 'pending';
+                          return Container(
+                            margin: const EdgeInsets.only(bottom: 8),
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppTheme.surfaceLight,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: AppTheme.border),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      isDone ? Icons.offline_pin : isErr ? Icons.error : isPaused ? Icons.pause_circle : Icons.bolt,
+                                      size: 18,
+                                      color: isDone ? AppTheme.emeraldAccent : isErr ? Colors.redAccent : isPaused ? Colors.amber : AppTheme.cyanAccent,
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(lt.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+                                    ),
+                                    Text("${lt.progress.toInt()}%", style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
+                                    if (isActive)
+                                      IconButton(
+                                        icon: const Icon(Icons.pause, size: 18, color: Colors.amber),
+                                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                                        constraints: const BoxConstraints(),
+                                        onPressed: () => hm.phoneDownloader.pause(lt.id),
+                                      ),
+                                    if (isPaused || isErr)
+                                      IconButton(
+                                        icon: const Icon(Icons.play_arrow, size: 18, color: AppTheme.emeraldAccent),
+                                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                                        constraints: const BoxConstraints(),
+                                        onPressed: () => hm.phoneDownloader.resume(lt.id),
+                                      ),
+                                    IconButton(
+                                      icon: const Icon(Icons.delete_outline, size: 18, color: Colors.redAccent),
+                                      padding: const EdgeInsets.only(left: 4),
+                                      constraints: const BoxConstraints(),
+                                      onPressed: () => hm.phoneDownloader.delete(lt.id),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 6),
+                                LinearProgressIndicator(
+                                  value: isDone ? 1.0 : (lt.progress / 100.0).clamp(0.0, 1.0),
+                                  backgroundColor: Colors.white10,
+                                  color: isDone ? AppTheme.emeraldAccent : isErr ? Colors.redAccent : isPaused ? Colors.amber : AppTheme.cyanAccent,
+                                  minHeight: 4,
+                                ),
+                                if (lt.speedBytesPerSec > 0 || lt.totalBytes > 0) ...[
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    [
+                                      if (lt.totalBytes > 0) '${_formatBytes(lt.downloadedBytes)} / ${_formatBytes(lt.totalBytes)}',
+                                      if (lt.speedBytesPerSec > 0) '${_formatBytes(lt.speedBytesPerSec)}/s',
+                                      if (lt.etaSeconds != null && lt.etaSeconds! > 0) 'ETA ${lt.etaSeconds}s',
+                                    ].join(' • '),
+                                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 10),
+                                  ),
+                                ],
+                                if (isErr && lt.error != null) ...[
+                                  const SizedBox(height: 4),
+                                  Text(lt.error!, style: const TextStyle(color: Colors.redAccent, fontSize: 11)),
+                                ],
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
+                    );
+                  },
+                ),
               ],
             ),
           ),

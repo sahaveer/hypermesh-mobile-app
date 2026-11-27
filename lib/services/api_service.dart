@@ -308,6 +308,7 @@ class ApiService {
   static String normalizeDownloadQuality(String format, String quality) {
     if (normalizeDownloadFormat(format) == 'audio') return 'best';
     final clean = quality.trim().toLowerCase();
+    if (clean == '4k' || clean == '2160' || clean == '2160p') return '4k';
     if (clean == '1080' || clean == '1080p') return '1080p';
     if (clean == '720' || clean == '720p') return '720p';
     return 'best';
@@ -348,6 +349,11 @@ class ApiService {
     String destination = "server",
     String? clientId,
     String? deviceName,
+    String? clipStart,
+    String? clipEnd,
+    bool subtitles = false,
+    bool downloadPlaylist = false,
+    String? proxy,
   }) async {
     if (isDemo) {
       return {'ok': false, 'error': 'Connect to your personal server first.'};
@@ -378,6 +384,21 @@ class ApiService {
       }
       if (deviceName != null && deviceName.isNotEmpty) {
         payload['device_name'] = deviceName;
+      }
+      if (clipStart != null && clipStart.trim().isNotEmpty) {
+        payload['clip_start'] = clipStart.trim();
+      }
+      if (clipEnd != null && clipEnd.trim().isNotEmpty) {
+        payload['clip_end'] = clipEnd.trim();
+      }
+      if (subtitles) {
+        payload['subtitles'] = true;
+      }
+      if (downloadPlaylist) {
+        payload['download_playlist'] = true;
+      }
+      if (proxy != null && proxy.trim().isNotEmpty) {
+        payload['proxy'] = proxy.trim();
       }
 
       final response = await _post(
@@ -473,6 +494,27 @@ class ApiService {
         headers['x-admin-token'] = adminToken!;
       }
       final response = await _delete(uri, headers: headers).timeout(const Duration(seconds: 5));
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  Future<bool> editDownload(String taskId, {String? url, String? proxy}) async {
+    if (isDemo) return false;
+    try {
+      final uri = Uri.parse("$hostUrl/api/downloads/${Uri.encodeComponent(taskId)}");
+      final headers = <String, String>{'Content-Type': 'application/json'};
+      if (adminToken != null && adminToken!.isNotEmpty) {
+        headers['x-admin-token'] = adminToken!;
+      }
+      final body = <String, dynamic>{};
+      if (url != null) body['url'] = url.trim();
+      if (proxy != null) body['proxy'] = proxy.trim();
+      final response = await (httpClient != null
+              ? httpClient!.patch(uri, headers: headers, body: json.encode(body))
+              : http.patch(uri, headers: headers, body: json.encode(body)))
+          .timeout(const Duration(seconds: 5));
       return response.statusCode == 200;
     } catch (_) {
       return false;

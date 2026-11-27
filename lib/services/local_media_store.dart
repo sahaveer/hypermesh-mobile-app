@@ -3,12 +3,12 @@ import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
-import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/song.dart';
 import '../models/video_item.dart';
+import 'phone_download_manager.dart';
 
 class SharedMediaFile {
   final String id;
@@ -520,7 +520,32 @@ class LocalMediaStore {
     }).toList();
   }
 
-  /// Pin/Save a peer's file directly to local device storage
+  /// Registers an already-downloaded file on disk into the local media library.
+  Future<SharedMediaFile> registerDownloadedFile({
+    required String id,
+    required File file,
+    required bool isVideo,
+    double duration = 0.0,
+    String resolution = '',
+  }) async {
+    final size = await file.length();
+    final name = _basename(file.path);
+    final item = SharedMediaFile(
+      id: id,
+      path: file.path,
+      name: name,
+      size: size,
+      isVideo: isVideo,
+      duration: duration > 0 ? duration : _estimateDuration(size, isVideo: isVideo),
+      resolution: resolution.isNotEmpty ? resolution : (isVideo ? _guessResolution(name) : ''),
+    );
+    _sharedFiles.removeWhere((f) => f.path == file.path);
+    _sharedFiles.insert(0, item);
+    await save();
+    return item;
+  }
+
+  /// Pin/Save a peer's file directly to local device storage using resumable chunked HTTP.
   Future<String?> pinMediaLocally({
     required String downloadUrl,
     required String fileName,
@@ -530,7 +555,6 @@ class LocalMediaStore {
     required double duration,
     required String resolution,
   }) async {
-    final client = http.Client();
     Directory? pinDirectory;
     SharedMediaFile? item;
     try {
@@ -549,39 +573,17 @@ class LocalMediaStore {
         downloaded = data.lengthInBytes;
         onProgress?.call(1);
       } else {
-        final request = http.Request('GET', Uri.parse(downloadUrl));
-        final response = await client.send(request).timeout(const Duration(seconds: 15));
-        if (response.statusCode != HttpStatus.ok) {
-          throw HttpException('Download returned ${response.statusCode}');
-        }
-        final disposition = response.headers['content-disposition'] ?? '';
-        final remoteName = RegExp(r'filename="?([^";]+)').firstMatch(disposition)?.group(1) ?? '';
-        final extension = RegExp(r'\.(mp3|aac|m4a|flac|wav|ogg|opus|mp4|mkv|webm|mov|avi)$',
-                caseSensitive: false)
-            .firstMatch(remoteName)
-            ?.group(0);
-        if (extension != null) {
-          final dot = safeName.lastIndexOf('.');
-          name = (dot > 0 ? safeName.substring(0, dot) : safeName) + extension;
-        }
         target = File("${pinDirectory.path}/$name");
-        final contentLength = response.contentLength;
-        downloaded = 0;
-        final sink = target.openWrite();
-        try {
-          await sink.addStream(response.stream.timeout(const Duration(seconds: 30)).map((chunk) {
-            downloaded += chunk.length;
-            if (contentLength != null && contentLength > 0) {
-              onProgress?.call(downloaded / contentLength);
+        await PhoneDownloadManager.downloadResumableHttp(
+          url: downloadUrl,
+          targetFile: target,
+          onProgress: (done, total, _, _) {
+            if (total > 0) {
+              onProgress?.call(done / total);
             }
-            return chunk;
-          }));
-        } finally {
-          await sink.close();
-        }
-        if (downloaded == 0 || (contentLength != null && contentLength != downloaded)) {
-          throw const HttpException('Incomplete media download');
-        }
+          },
+        );
+        downloaded = await target.length();
       }
 
       item = SharedMediaFile(
@@ -607,8 +609,6 @@ class LocalMediaStore {
       }
       debugPrint('Error pinning media: $e');
       return null;
-    } finally {
-      client.close();
     }
   }
 

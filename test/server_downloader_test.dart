@@ -18,6 +18,8 @@ void main() {
       expect(ApiService.normalizeDownloadFormat('video'), 'video');
 
       expect(ApiService.normalizeDownloadQuality('audio', '320'), 'best');
+      expect(ApiService.normalizeDownloadQuality('video', '4k'), '4k');
+      expect(ApiService.normalizeDownloadQuality('video', '2160p'), '4k');
       expect(ApiService.normalizeDownloadQuality('video', '1080'), '1080p');
       expect(ApiService.normalizeDownloadQuality('video', '720p'), '720p');
       expect(ApiService.normalizeDownloadQuality('video', 'anything'), 'best');
@@ -336,17 +338,26 @@ void main() {
       expect(downloadCalled, isFalse);
 
       // Pause active processing task
-      await tester.tap(find.byTooltip('Pause download').first);
+      final pauseBtn = find.byTooltip('Pause download').first;
+      await tester.ensureVisible(pauseBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(pauseBtn);
       await tester.pumpAndSettle();
       expect(lastAction, 'pause');
 
       // Resume paused task
-      await tester.tap(find.byTooltip('Resume download').first);
+      final resumeBtn = find.byTooltip('Resume download').first;
+      await tester.ensureVisible(resumeBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(resumeBtn);
       await tester.pumpAndSettle();
       expect(lastAction, 'resume');
 
       // Delete task while in queue
-      await tester.tap(find.byTooltip('Delete download').first);
+      final deleteBtn = find.byTooltip('Delete download').first;
+      await tester.ensureVisible(deleteBtn);
+      await tester.pumpAndSettle();
+      await tester.tap(deleteBtn);
       await tester.pumpAndSettle();
       expect(lastAction, 'delete');
       expect(find.text('Active Processing Movie'), findsNothing);

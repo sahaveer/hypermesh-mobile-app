@@ -9,6 +9,7 @@ import 'package:hypermesh_player/services/local_mesh_server.dart';
 import 'package:hypermesh_player/services/app_update_service.dart';
 import 'package:hypermesh_player/config/app_config.dart';
 import 'package:hypermesh_player/services/local_mesh_discovery.dart';
+import 'package:hypermesh_player/services/phone_download_manager.dart';
 import 'package:hypermesh_player/providers/hypermesh_provider.dart';
 import 'package:hypermesh_player/models/peer_node.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -223,5 +224,58 @@ void main() {
         expect(String.fromCharCodes(data.buffer.asUint8List(data.offsetInBytes + 4, 4)), 'ftyp');
       }
     }, createHttpClient: (_) => throw StateError('Demo attempted to use HTTP'));
+  });
+
+  test('LocalMeshServer serves HTTP 206 Range downloads and PhoneDownloadManager assembles chunked files', () async {
+    SharedPreferences.setMockInitialValues({});
+    final prevHttpOverrides = HttpOverrides.current;
+    HttpOverrides.global = null;
+    final tempRoot = await Directory.systemTemp.createTemp('hypermesh_chunk_dl_');
+    try {
+      final sourceFile = File('${tempRoot.path}/big_clip.mp4');
+      final payload = List<int>.generate(1500 * 1024, (i) => i % 251); // ~1.5 MB (> 1 MB triggers multi-chunk)
+      await sourceFile.writeAsBytes(payload);
+
+      final store = LocalMediaStore();
+      await store.registerDownloadedFile(
+        id: 'chunk-src-1',
+        file: sourceFile,
+        isVideo: true,
+      );
+
+      final server = LocalMeshServer(
+        mediaStore: store,
+        deviceId: 'host-chunk',
+        deviceName: 'Chunk Host',
+        presetToken: 'chunk-token',
+      );
+      expect(await server.start(), isTrue);
+
+      try {
+        final client = http.Client();
+        final rangeRes = await client.get(
+          Uri.parse('${server.serverUrl}/api/download/chunk-src-1?t=chunk-token'),
+          headers: {'Range': 'bytes=0-15'},
+        );
+        expect(rangeRes.statusCode, 206);
+        expect(rangeRes.headers['accept-ranges'], 'bytes');
+        expect(rangeRes.bodyBytes, payload.sublist(0, 16));
+        client.close();
+
+        final outDir = await Directory('${tempRoot.path}/dl_out').create();
+        final target = File('${outDir.path}/assembled.mp4');
+        await PhoneDownloadManager.downloadResumableHttp(
+          url: '${server.serverUrl}/api/download/chunk-src-1?t=chunk-token',
+          targetFile: target,
+        );
+        expect(await target.exists(), isTrue);
+        expect(await target.readAsBytes(), payload);
+      } finally {
+        await server.stop();
+      }
+    } finally {
+      HttpOverrides.global = prevHttpOverrides;
+      await tempRoot.delete(recursive: true);
+    }
   });
 }
