@@ -14,6 +14,7 @@ class VideoItem {
   final String? localFilePath;
   final String? demoAsset;
   final String? shareId;
+  final String? streamToken;
 
   VideoItem({
     required this.id,
@@ -31,6 +32,7 @@ class VideoItem {
     this.localFilePath,
     this.demoAsset,
     this.shareId,
+    this.streamToken,
   });
 
   factory VideoItem.fromJson(
@@ -39,6 +41,7 @@ class VideoItem {
     String sourceNodeHost = "",
     bool isPeer = false,
     String? localFilePath,
+    String? streamToken,
   }) {
     return VideoItem(
       id: json['id']?.toString() ?? '',
@@ -55,13 +58,16 @@ class VideoItem {
       isFavorite: json['is_favorite'] == 1 || json['is_favorite'] == true,
       localFilePath: localFilePath ?? json['local_file_path']?.toString(),
       shareId: json['share_id']?.toString(),
+      streamToken: streamToken,
     );
   }
 
   String getStreamUrl(String defaultHost) {
     final host = sourceNodeHost.isNotEmpty ? sourceNodeHost : defaultHost;
     final cleanHost = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
-    return "$cleanHost/api/stream/$id";
+    final base = "$cleanHost/api/stream/$id";
+    if (streamToken == null || streamToken!.isEmpty) return base;
+    return "$base?t=${Uri.encodeQueryComponent(streamToken!)}";
   }
 
   String get formattedDuration {

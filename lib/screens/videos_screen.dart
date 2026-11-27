@@ -65,16 +65,38 @@ class VideosScreen extends StatelessWidget {
                 ),
               const Divider(color: AppTheme.border),
 
-              // Option 1: If it's a locally shared video from this phone
-              if (hypermesh.isLocalSharedMedia(video.id))
+              // Mesh-share toggle and destructive actions (local files only)
+              if (hypermesh.isLocalSharedMedia(video.id)) ...[
+                ListTile(
+                  leading: Icon(
+                    hypermesh.isFileSharedWithMesh(video.id) ? Icons.cell_tower : Icons.wifi_off,
+                    color: AppTheme.cyanAccent,
+                  ),
+                  title: Text(
+                    hypermesh.isFileSharedWithMesh(video.id)
+                        ? "Stop Sharing with Mesh"
+                        : "Share with Mesh",
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    hypermesh.isFileSharedWithMesh(video.id)
+                        ? "Peers will no longer see this video; it stays on your phone."
+                        : "Peers on your Wi-Fi will be able to stream this video.",
+                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    await hypermesh.toggleFileSharedWithMesh(video.id);
+                  },
+                ),
                 ListTile(
                   leading: const Icon(Icons.remove_circle_outline, color: Colors.orangeAccent),
                   title: const Text(
-                    "Stop Sharing / Remove from My Phone",
+                    "Remove from Library (Keep File)",
                     style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold),
                   ),
                   subtitle: const Text(
-                    "Unshares this video from your phone (keeps original file on phone)",
+                    "Drops this entry from the app's library. The file on your phone is kept.",
                     style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
                   ),
                   onTap: () {
@@ -82,12 +104,56 @@ class VideosScreen extends StatelessWidget {
                     hypermesh.removeSharedFile(video.id);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text("Unshared '${video.title}' from your phone."),
+                        content: Text("Removed '${video.title}' from library."),
                         backgroundColor: Colors.orangeAccent,
                       ),
                     );
                   },
                 ),
+                ListTile(
+                  leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                  title: const Text(
+                    "Delete File from Device",
+                    style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: const Text(
+                    "Permanently deletes the video file from your phone's storage. Cannot be undone.",
+                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (dctx) => AlertDialog(
+                        backgroundColor: AppTheme.surface,
+                        title: const Text("Delete file?", style: TextStyle(color: Colors.white)),
+                        content: Text(
+                          "This will permanently delete '${video.title}' from your phone's storage. Cannot be undone.",
+                          style: const TextStyle(color: AppTheme.textSecondary),
+                        ),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text("Cancel")),
+                          TextButton(
+                            onPressed: () => Navigator.pop(dctx, true),
+                            child: const Text("Delete", style: TextStyle(color: Colors.redAccent)),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true && context.mounted) {
+                      final ok = await hypermesh.deleteLocalFile(video.id);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(ok ? "Deleted '${video.title}' from device." : "Could not delete file."),
+                            backgroundColor: ok ? Colors.redAccent : Colors.orangeAccent,
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ],
 
               // Option 2: Remove from my list (hide unwanted peer or server video)
               if (!hypermesh.isLocalSharedMedia(video.id))

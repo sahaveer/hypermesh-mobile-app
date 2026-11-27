@@ -14,6 +14,7 @@ class Song {
   final String? localFilePath;
   final String? demoAsset;
   final String? shareId;
+  final String? streamToken;
 
   Song({
     required this.id,
@@ -31,6 +32,7 @@ class Song {
     this.localFilePath,
     this.demoAsset,
     this.shareId,
+    this.streamToken,
   });
 
   factory Song.fromJson(
@@ -39,6 +41,7 @@ class Song {
     String sourceNodeHost = "",
     bool isPeer = false,
     String? localFilePath,
+    String? streamToken,
   }) {
     return Song(
       id: json['id']?.toString() ?? '',
@@ -55,19 +58,24 @@ class Song {
       isFavorite: json['is_favorite'] == 1 || json['is_favorite'] == true,
       localFilePath: localFilePath ?? json['local_file_path']?.toString(),
       shareId: json['share_id']?.toString(),
+      streamToken: streamToken,
     );
   }
 
   String getStreamUrl(String defaultHost) {
     final host = sourceNodeHost.isNotEmpty ? sourceNodeHost : defaultHost;
     final cleanHost = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
-    return "$cleanHost/api/stream/$id";
+    final base = "$cleanHost/api/stream/$id";
+    if (streamToken == null || streamToken!.isEmpty) return base;
+    return "$base?t=${Uri.encodeQueryComponent(streamToken!)}";
   }
 
   String getCoverUrl(String defaultHost) {
     final host = sourceNodeHost.isNotEmpty ? sourceNodeHost : defaultHost;
     final cleanHost = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
-    return "$cleanHost/api/cover/$id";
+    final base = "$cleanHost/api/cover/$id";
+    if (streamToken == null || streamToken!.isEmpty) return base;
+    return "$base?t=${Uri.encodeQueryComponent(streamToken!)}";
   }
 
   String get formattedDuration {

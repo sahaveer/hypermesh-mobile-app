@@ -134,7 +134,11 @@ class ApiService {
     if (isDemo && peer.id.startsWith("demo-peer-")) return getDemoPeerSongs(peer);
     try {
       final uri = Uri.parse("${peer.baseUrl}/api/songs?scope=shared&limit=1000");
-      final response = await http.get(uri).timeout(const Duration(seconds: 4));
+      final headers = <String, String>{};
+      if (peer.meshToken != null && peer.meshToken!.isNotEmpty) {
+        headers['x-mesh-token'] = peer.meshToken!;
+      }
+      final response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -144,6 +148,7 @@ class ApiService {
           sourceNodeName: peer.name,
           sourceNodeHost: peer.baseUrl,
           isPeer: true,
+          streamToken: peer.meshToken,
         )).toList();
       }
     } catch (_) {}
@@ -177,7 +182,11 @@ class ApiService {
     if (isDemo && peer.id.startsWith("demo-peer-")) return getDemoPeerVideos(peer);
     try {
       final uri = Uri.parse("${peer.baseUrl}/api/videos?scope=shared&limit=500");
-      final response = await http.get(uri).timeout(const Duration(seconds: 4));
+      final headers = <String, String>{};
+      if (peer.meshToken != null && peer.meshToken!.isNotEmpty) {
+        headers['x-mesh-token'] = peer.meshToken!;
+      }
+      final response = await http.get(uri, headers: headers).timeout(const Duration(seconds: 4));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -187,6 +196,7 @@ class ApiService {
           sourceNodeName: peer.name,
           sourceNodeHost: peer.baseUrl,
           isPeer: true,
+          streamToken: peer.meshToken,
         )).toList();
       }
     } catch (_) {}

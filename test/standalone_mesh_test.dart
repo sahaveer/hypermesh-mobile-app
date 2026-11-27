@@ -48,35 +48,52 @@ void main() {
         mediaStore: store,
         deviceId: 'test_node_01',
         deviceName: 'Test Phone',
+        presetToken: 'test-mesh-token-xyz',
       );
 
       final started = await server.start();
       expect(started, true);
       expect(server.isRunning, true);
+      expect(server.meshToken.isNotEmpty, true);
 
+      final token = server.meshToken;
       final client = http.Client();
 
-      // Test /api/info
+      // /api/info stays public so a fresh scan can read the peer's name.
       final infoRes = await client.get(Uri.parse('${server.serverUrl}/api/info'));
       expect(infoRes.statusCode, 200);
       final infoJson = json.decode(infoRes.body);
       expect(infoJson['device_name'], 'Test Phone');
       expect(infoJson['is_online'], true);
 
-      // Test /api/songs
-      final songsRes = await client.get(Uri.parse('${server.serverUrl}/api/songs'));
+      // Unauthenticated data endpoints must be rejected.
+      final unauthSongs = await client.get(Uri.parse('${server.serverUrl}/api/songs'));
+      expect(unauthSongs.statusCode, 401);
+
+      // With the token header they succeed.
+      final songsRes = await client.get(
+        Uri.parse('${server.serverUrl}/api/songs'),
+        headers: {'x-mesh-token': token},
+      );
       expect(songsRes.statusCode, 200);
       final songsJson = json.decode(songsRes.body);
       expect(songsJson['songs'], isA<List>());
 
-      // Test /api/videos
-      final videosRes = await client.get(Uri.parse('${server.serverUrl}/api/videos'));
+      // The ?t= query parameter also works (for media players that can't set headers).
+      final videosRes = await client.get(
+        Uri.parse('${server.serverUrl}/api/videos?t=${Uri.encodeQueryComponent(token)}'),
+      );
       expect(videosRes.statusCode, 200);
       final videosJson = json.decode(videosRes.body);
       expect(videosJson['videos'], isA<List>());
 
-      // Test /api/app/version
-      final appVerRes = await client.get(Uri.parse('${server.serverUrl}/api/app/version'));
+      // APK version endpoint also gated.
+      final unauthAppVer = await client.get(Uri.parse('${server.serverUrl}/api/app/version'));
+      expect(unauthAppVer.statusCode, 401);
+      final appVerRes = await client.get(
+        Uri.parse('${server.serverUrl}/api/app/version'),
+        headers: {'x-mesh-token': token},
+      );
       expect(appVerRes.statusCode, 200);
       final appVerJson = json.decode(appVerRes.body);
       expect(appVerJson['version'], isNotNull);
@@ -87,30 +104,43 @@ void main() {
       client.close();
     });
 
-    test('AppUpdateService detects newer peer updates on local mesh', () {
-      final peers = [
-        PeerNode(
-          id: 'peer-old',
-          name: 'Old Peer',
-          host: '192.168.1.10',
-          appVersion: '1.0.0',
-          buildNumber: 1,
-        ),
-        PeerNode(
-          id: 'peer-new',
-          name: 'Alex (New Node)',
-          host: '192.168.1.50',
-          appVersion: '9.9.9',
-          buildNumber: AppConfig.buildNumber + 2,
-        ),
-      ];
+    test('AppUpdateService peer updates are gated behind opt-in and a paired token', () {
+      final untrustedPeer = PeerNode(
+        id: 'peer-untrusted',
+        name: 'Untrusted Beacon',
+        host: '192.168.1.50',
+        appVersion: '9.9.9',
+        buildNumber: AppConfig.buildNumber + 2,
+      );
+      final pairedPeer = PeerNode(
+        id: 'peer-new',
+        name: 'Alex (Paired)',
+        host: '192.168.1.60',
+        appVersion: '9.9.9',
+        buildNumber: AppConfig.buildNumber + 2,
+        meshToken: 'paired-token',
+      );
 
-      final update = AppUpdateService.checkPeerUpdates(peers);
+      // Default: peer updates disabled entirely.
+      expect(AppUpdateService.checkPeerUpdates([untrustedPeer, pairedPeer]), isNull);
+
+      // Opted in but only unpaired peer available: still no update prompt.
+      expect(
+        AppUpdateService.checkPeerUpdates([untrustedPeer], allowPeerUpdates: true),
+        isNull,
+      );
+
+      // Opted in + paired peer: update is offered, and APK URL carries the peer's token.
+      final update = AppUpdateService.checkPeerUpdates(
+        [untrustedPeer, pairedPeer],
+        allowPeerUpdates: true,
+      );
       expect(update, isNotNull);
       expect(update!.version, '9.9.9');
       expect(update.buildNumber, AppConfig.buildNumber + 2);
       expect(update.isPeerUpdate, true);
-      expect(update.sourceName, 'Alex (New Node)');
+      expect(update.sourceName, 'Alex (Paired)');
+      expect(update.apkUrl.contains('t=paired-token'), true);
     });
 
     test('LocalMediaStore scans multiple folders and removes folder cleanly', () async {
@@ -151,12 +181,16 @@ void main() {
     });
 
     test('QR peer address parsing and manual peer retention', () {
-      expect(HypermeshProvider.parsePeerAddress('http://192.168.43.1:8080'), ('192.168.43.1', 8080));
-      expect(HypermeshProvider.parsePeerAddress('192.168.1.25:9000'), ('192.168.1.25', 9000));
-      expect(HypermeshProvider.parsePeerAddress('192.168.1.25'), ('192.168.1.25', 8080));
+      expect(HypermeshProvider.parsePeerAddress('http://192.168.43.1:8080'), ('192.168.43.1', 8080, null));
+      expect(HypermeshProvider.parsePeerAddress('192.168.1.25:9000'), ('192.168.1.25', 9000, null));
+      expect(HypermeshProvider.parsePeerAddress('192.168.1.25'), ('192.168.1.25', 8080, null));
       expect(
         HypermeshProvider.parsePeerAddress('{"host":"10.0.0.5","port":8081}'),
-        ('10.0.0.5', 8081),
+        ('10.0.0.5', 8081, null),
+      );
+      expect(
+        HypermeshProvider.parsePeerAddress('{"host":"10.0.0.5","port":8081,"token":"abc123"}'),
+        ('10.0.0.5', 8081, 'abc123'),
       );
       expect(HypermeshProvider.parsePeerAddress(''), isNull);
 

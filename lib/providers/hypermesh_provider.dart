@@ -13,6 +13,7 @@ import '../services/local_mesh_discovery.dart';
 import '../services/background_mesh_service.dart';
 import '../widgets/background_sharing_dialog.dart';
 import '../services/app_update_service.dart';
+import '../config/app_config.dart';
 
 enum MeshFilter { all, mine, peers, favorites }
 
@@ -67,6 +68,16 @@ class HypermeshProvider extends ChangeNotifier {
   int get sharedFilesCount => localMediaStore.sharedFiles.length;
   List<String> get sharedFolders => localMediaStore.sharedFolders;
   String get localShareUrl => "http://$localNodeIp:$localNodePort";
+  String get localMeshToken => _localMeshServer?.meshToken ?? "";
+  String get localPairingPayload {
+    final token = localMeshToken;
+    if (token.isEmpty) return localShareUrl;
+    return json.encode({
+      'host': localNodeIp,
+      'port': localNodePort,
+      'token': token,
+    });
+  }
   bool get isBackgroundServiceEnabled => _isBackgroundServiceEnabled;
   bool _isBackgroundServiceEnabled = false;
   bool _serverDownloaderAvailable = false;
@@ -230,15 +241,16 @@ class HypermeshProvider extends ChangeNotifier {
       deviceId: _deviceId,
       deviceName: _deviceName,
       serverPort: _localMeshServer!.port,
-      musicCount: localMediaStore.sharedSongs.length,
-      videoCount: localMediaStore.sharedVideos.length,
+      musicCount: localMediaStore.meshSongs.length,
+      videoCount: localMediaStore.meshVideos.length,
       onPeersChanged: (discovered) {
         _onDiscoveredPeersChanged(discovered);
       },
     );
     await _localMeshDiscovery!.start();
 
-    // 3. Load user preferences & refresh
+    // 3. Load user preferences & paired-peer tokens, then refresh
+    await _loadPairedTokens();
     await _loadPreferences();
     _isBackgroundServiceEnabled = await BackgroundMeshService.isEnabled();
     if (_isBackgroundServiceEnabled) {
@@ -308,8 +320,8 @@ class HypermeshProvider extends ChangeNotifier {
     final res = await localMediaStore.pickAndAddFolder();
     if (res.folderPath != null) {
       _localMeshDiscovery?.updateMediaCounts(
-        music: localMediaStore.sharedSongs.length,
-        video: localMediaStore.sharedVideos.length,
+        music: localMediaStore.meshSongs.length,
+        video: localMediaStore.meshVideos.length,
       );
       await refreshLibrary();
       _updateBackgroundNotification();
@@ -320,8 +332,8 @@ class HypermeshProvider extends ChangeNotifier {
   Future<int> rescanLocalFolders() async {
     final added = await localMediaStore.rescanAllFolders();
     _localMeshDiscovery?.updateMediaCounts(
-      music: localMediaStore.sharedSongs.length,
-      video: localMediaStore.sharedVideos.length,
+      music: localMediaStore.meshSongs.length,
+      video: localMediaStore.meshVideos.length,
     );
     await refreshLibrary();
     _updateBackgroundNotification();
@@ -331,8 +343,8 @@ class HypermeshProvider extends ChangeNotifier {
   Future<void> removeLocalFolder(String folderPath) async {
     await localMediaStore.removeFolder(folderPath);
     _localMeshDiscovery?.updateMediaCounts(
-      music: localMediaStore.sharedSongs.length,
-      video: localMediaStore.sharedVideos.length,
+      music: localMediaStore.meshSongs.length,
+      video: localMediaStore.meshVideos.length,
     );
     await refreshLibrary();
     _updateBackgroundNotification();
@@ -344,9 +356,16 @@ class HypermeshProvider extends ChangeNotifier {
       return (ok: false, message: "Invalid peer QR code or IP address.", peer: null);
     }
 
-    final (host, port) = parsed;
+    final (host, port, token) = parsed;
     if (host == localNodeIp && port == localNodePort) {
       return (ok: false, message: "That is this device's own QR code.", peer: null);
+    }
+    if (token == null || token.isEmpty) {
+      return (
+        ok: false,
+        message: "This QR is missing the pairing token. Ask the other device to share a fresh QR from the latest app.",
+        peer: null,
+      );
     }
 
     try {
@@ -379,8 +398,10 @@ class HypermeshProvider extends ChangeNotifier {
         lastSeen: DateTime.now(),
         appVersion: appVersion,
         buildNumber: buildNumber,
+        meshToken: token,
       );
 
+      await _savePairedToken(peerId, token);
       _localMeshDiscovery?.addManualPeerNode(peer);
       _mergePeers(_localMeshDiscovery?.peers ?? []);
       await _syncPeerMedia();
@@ -401,7 +422,9 @@ class HypermeshProvider extends ChangeNotifier {
     }
   }
 
-  static (String, int)? parsePeerAddress(String rawInput) {
+  /// Parse a peer QR / address. JSON form `{host, port, token}` is the only
+  /// way to transport a pairing token; bare URLs and IPs have no token.
+  static (String, int, String?)? parsePeerAddress(String rawInput) {
     var text = rawInput.trim();
     if (text.isEmpty) return null;
 
@@ -410,7 +433,8 @@ class HypermeshProvider extends ChangeNotifier {
         final map = json.decode(text) as Map<String, dynamic>;
         final h = map['host']?.toString().trim() ?? '';
         final p = (map['port'] is num) ? (map['port'] as num).toInt() : 8080;
-        if (h.isNotEmpty) return (h, p);
+        final t = map['token']?.toString().trim();
+        if (h.isNotEmpty) return (h, p, (t != null && t.isNotEmpty) ? t : null);
       } catch (_) {}
     }
 
@@ -420,15 +444,34 @@ class HypermeshProvider extends ChangeNotifier {
     final uri = Uri.tryParse(text);
     if (uri == null || uri.host.isEmpty) return null;
     final port = uri.hasPort ? uri.port : 8080;
-    return (uri.host, port);
+    final t = uri.queryParameters['t']?.trim();
+    return (uri.host, port, (t != null && t.isNotEmpty) ? t : null);
+  }
+
+  Map<String, String> _pairedTokens = {};
+
+  Future<void> _loadPairedTokens() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('mesh_paired_tokens');
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final decoded = json.decode(raw) as Map<String, dynamic>;
+      _pairedTokens = decoded.map((k, v) => MapEntry(k, v.toString()));
+    } catch (_) {}
+  }
+
+  Future<void> _savePairedToken(String peerId, String token) async {
+    _pairedTokens[peerId] = token;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('mesh_paired_tokens', json.encode(_pairedTokens));
   }
 
   Future<int> pickLocalFiles({required bool isVideo}) async {
     final added = await localMediaStore.pickAndAddFiles(isVideo: isVideo);
     if (added.isNotEmpty) {
       _localMeshDiscovery?.updateMediaCounts(
-        music: localMediaStore.sharedSongs.length,
-        video: localMediaStore.sharedVideos.length,
+        music: localMediaStore.meshSongs.length,
+        video: localMediaStore.meshVideos.length,
       );
       await refreshLibrary();
       _updateBackgroundNotification();
@@ -438,25 +481,64 @@ class HypermeshProvider extends ChangeNotifier {
 
   Future<void> removeSharedFile(String id) async {
     await localMediaStore.removeFile(id);
-    _localMeshDiscovery?.updateMediaCounts(
-      music: localMediaStore.sharedSongs.length,
-      video: localMediaStore.sharedVideos.length,
-    );
+    _refreshLocalMediaCounts();
     await refreshLibrary();
     _updateBackgroundNotification();
   }
 
+  void _refreshLocalMediaCounts() {
+    _localMeshDiscovery?.updateMediaCounts(
+      music: localMediaStore.meshSongs.length,
+      video: localMediaStore.meshVideos.length,
+    );
+  }
+
+  bool isFileSharedWithMesh(String id) {
+    final file = localMediaStore.getFileById(id);
+    return file?.sharedWithMesh ?? false;
+  }
+
+  Future<void> toggleFileSharedWithMesh(String id) async {
+    final file = localMediaStore.getFileById(id);
+    if (file == null) return;
+    await localMediaStore.setFileSharedWithMesh(id, !file.sharedWithMesh);
+    _refreshLocalMediaCounts();
+    _updateBackgroundNotification();
+    notifyListeners();
+  }
+
+  Future<bool> deleteLocalFile(String id) async {
+    final ok = await localMediaStore.deleteLocalFile(id);
+    _refreshLocalMediaCounts();
+    await refreshLibrary();
+    _updateBackgroundNotification();
+    return ok;
+  }
+
+  Future<({int added, bool permissionGranted, String? error})> scanDeviceMedia() async {
+    final result = await localMediaStore.scanDeviceMedia();
+    if (result.added > 0) {
+      _refreshLocalMediaCounts();
+      await refreshLibrary();
+      _updateBackgroundNotification();
+    }
+    return result;
+  }
+
   // --- PINNING (COPYING PEER MEDIA TO LOCAL STORAGE) ---
   Future<bool> pinPeerMedia(Object item, {void Function(double)? onProgress}) async {
-    final (id, title, source, asset, duration, resolution, isVideo) = switch (item) {
-      Song() => (item.id, item.title, item.sourceNodeHost, item.demoAsset, item.duration, '', false),
-      VideoItem() => (item.id, item.title, item.sourceNodeHost, item.demoAsset, item.duration, item.resolution, true),
-      _ => ('', '', '', null, 0.0, '', false),
+    final (id, title, source, asset, duration, resolution, isVideo, token) = switch (item) {
+      Song() => (item.id, item.title, item.sourceNodeHost, item.demoAsset, item.duration, '', false, item.streamToken),
+      VideoItem() => (item.id, item.title, item.sourceNodeHost, item.demoAsset, item.duration, item.resolution, true, item.streamToken),
+      _ => ('', '', '', null, 0.0, '', false, null),
     };
     if (id.isEmpty || isLocalSharedMedia(id)) return false;
     final host = source.isEmpty ? apiService.hostUrl : source;
     final cleanHost = host.endsWith('/') ? host.substring(0, host.length - 1) : host;
-    final url = "$cleanHost/api/download/${Uri.encodeComponent(id)}";
+    var url = "$cleanHost/api/download/${Uri.encodeComponent(id)}";
+    if (token != null && token.isNotEmpty) {
+      url = "$url?t=${Uri.encodeQueryComponent(token)}";
+    }
     return _activePins.putIfAbsent(url, () async {
       try {
         return await _savePin(url, title, isVideo, asset, duration, resolution, onProgress);
@@ -502,8 +584,8 @@ class HypermeshProvider extends ChangeNotifier {
 
     if (savedPath != null) {
       _localMeshDiscovery?.updateMediaCounts(
-        music: localMediaStore.sharedSongs.length,
-        video: localMediaStore.sharedVideos.length,
+        music: localMediaStore.meshSongs.length,
+        video: localMediaStore.meshVideos.length,
       );
       await refreshLibrary();
       return true;
@@ -552,10 +634,14 @@ class HypermeshProvider extends ChangeNotifier {
       if (generation != _refreshGeneration) return;
       _updateBackgroundNotification();
 
-      // 4. Check for updates (Option C: Peer Mesh, Option B: Server OTA)
-      final update = apiService.isDemo ? null :
-          AppUpdateService.checkPeerUpdates(_peerNodes) ??
-          await AppUpdateService.checkServerUpdate(apiService.hostUrl);
+      // 4. Check for updates: GitHub release first, then server OTA, then
+      //    peer mesh (only when the user has opted in). Demo mode skips all.
+      final allowPeer = await AppUpdateService.peerUpdatesAllowed();
+      final update = apiService.isDemo
+          ? null
+          : await AppUpdateService.checkGithubRelease(AppConfig.githubReleaseRepo) ??
+              await AppUpdateService.checkServerUpdate(apiService.hostUrl) ??
+              AppUpdateService.checkPeerUpdates(_peerNodes, allowPeerUpdates: allowPeer);
       if (generation == _refreshGeneration) _availableUpdate = update;
     } catch (_) {}
 
@@ -565,23 +651,47 @@ class HypermeshProvider extends ChangeNotifier {
   }
 
   Future<UpdateInfo?> checkForUpdates() async {
-    final peerUp = AppUpdateService.checkPeerUpdates(_peerNodes);
-    if (peerUp != null) {
-      _availableUpdate = peerUp;
+    final githubUp = await AppUpdateService.checkGithubRelease(AppConfig.githubReleaseRepo);
+    if (githubUp != null) {
+      _availableUpdate = githubUp;
       notifyListeners();
-      return peerUp;
+      return githubUp;
     }
 
     final serverUp = await AppUpdateService.checkServerUpdate(apiService.hostUrl);
-    _availableUpdate = serverUp;
+    if (serverUp != null) {
+      _availableUpdate = serverUp;
+      notifyListeners();
+      return serverUp;
+    }
+
+    final allowPeer = await AppUpdateService.peerUpdatesAllowed();
+    final peerUp = AppUpdateService.checkPeerUpdates(_peerNodes, allowPeerUpdates: allowPeer);
+    _availableUpdate = peerUp;
     notifyListeners();
-    return serverUp;
+    return peerUp;
+  }
+
+  Future<bool> isPeerUpdatesAllowed() => AppUpdateService.peerUpdatesAllowed();
+
+  Future<void> setPeerUpdatesAllowed(bool value) async {
+    await AppUpdateService.setPeerUpdatesAllowed(value);
+    notifyListeners();
   }
 
   void _mergePeers(List<PeerNode> discovered) {
+    // Attach any previously paired token to its peer so UDP-discovered
+    // peers that we have already paired with (via QR) stay authenticated.
+    PeerNode withStoredToken(PeerNode p) {
+      if (p.meshToken != null && p.meshToken!.isNotEmpty) return p;
+      final stored = _pairedTokens[p.id];
+      if (stored == null || stored.isEmpty) return p;
+      return p.withToken(stored);
+    }
+
     _peerNodes = {
-      for (final peer in _hubPeers) peer.id: peer,
-      for (final peer in discovered) peer.id: peer,
+      for (final peer in _hubPeers) peer.id: withStoredToken(peer),
+      for (final peer in discovered) peer.id: withStoredToken(peer),
     }.values.where((peer) => peer.id != _deviceId).toList();
   }
 

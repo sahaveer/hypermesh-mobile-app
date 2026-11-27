@@ -2,11 +2,14 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'local_media_store.dart';
 import '../config/app_config.dart';
 import 'background_mesh_service.dart';
 
 class LocalMeshServer {
+  static const String _tokenPrefsKey = 'mesh_server_token';
+
   final LocalMediaStore mediaStore;
   final String deviceId;
   String deviceName;
@@ -15,20 +18,55 @@ class LocalMeshServer {
   int _port = 8080;
   String _localIp = "127.0.0.1";
   bool _isRunning = false;
+  String _meshToken;
 
   LocalMeshServer({
     required this.mediaStore,
     required this.deviceId,
     required this.deviceName,
-  });
+    String? presetToken,
+  }) : _meshToken = presetToken ?? "";
 
   bool get isRunning => _isRunning;
   int get port => _port;
   String get localIp => _localIp;
   String get serverUrl => "http://$_localIp:$_port";
+  String get meshToken => _meshToken;
+
+  static Future<String> _loadOrCreateToken() async {
+    final prefs = await SharedPreferences.getInstance();
+    var token = prefs.getString(_tokenPrefsKey);
+    if (token == null || token.length < 32) {
+      final rng = Random.secure();
+      final bytes = List<int>.generate(32, (_) => rng.nextInt(256));
+      token = base64Url.encode(bytes).replaceAll('=', '');
+      await prefs.setString(_tokenPrefsKey, token);
+    }
+    return token;
+  }
+
+  bool _isAuthorized(HttpRequest request) {
+    final header = request.headers.value('x-mesh-token')?.trim();
+    if (header != null && header == _meshToken) return true;
+    final query = request.uri.queryParameters['t']?.trim();
+    if (query != null && query == _meshToken) return true;
+    return false;
+  }
+
+  Future<void> _rejectUnauthorized(HttpRequest request) async {
+    request.response.statusCode = HttpStatus.unauthorized;
+    request.response.headers.contentType = ContentType.json;
+    request.response.write(json.encode({'error': 'Pair this device via QR to access the mesh.'}));
+    await request.response.close();
+  }
 
   Future<bool> start() async {
     if (_isRunning) return true;
+
+    // 0. Load or generate persistent mesh token (shared secret for this device's server)
+    if (_meshToken.isEmpty) {
+      _meshToken = await _loadOrCreateToken();
+    }
 
     // 1. Resolve Local IP (Wi-Fi or Hotspot interface)
     _localIp = await _resolveLocalIp();
@@ -76,7 +114,7 @@ class LocalMeshServer {
     // Add CORS headers to all responses
     request.response.headers.set('Access-Control-Allow-Origin', '*');
     request.response.headers.set('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    request.response.headers.set('Access-Control-Allow-Headers', 'Range, Content-Type, Accept');
+    request.response.headers.set('Access-Control-Allow-Headers', 'Range, Content-Type, Accept, X-Mesh-Token');
 
     if (request.method == 'OPTIONS') {
       request.response.statusCode = HttpStatus.ok;
@@ -85,6 +123,14 @@ class LocalMeshServer {
     }
 
     final path = request.uri.path;
+    // /api/info stays public so a QR scan (which embeds the token) can still
+    // show the peer's name and counts on connect; every other endpoint
+    // requires the paired mesh token (header or ?t= query).
+    const publicPaths = {'/api/info', '/api/peers/info'};
+    if (!publicPaths.contains(path) && !_isAuthorized(request)) {
+      await _rejectUnauthorized(request);
+      return;
+    }
 
     try {
       if (path == '/api/info' || path == '/api/peers/info') {
@@ -126,8 +172,8 @@ class LocalMeshServer {
       'host': _localIp,
       'port': _port,
       'url': serverUrl,
-      'music_count': mediaStore.sharedSongs.length,
-      'video_count': mediaStore.sharedVideos.length,
+      'music_count': mediaStore.meshSongs.length,
+      'video_count': mediaStore.meshVideos.length,
       'is_online': true,
       'app_version': AppConfig.appVersion,
       'build_number': AppConfig.buildNumber,
@@ -181,7 +227,7 @@ class LocalMeshServer {
   }
 
   Future<void> _handleSongs(HttpRequest request) async {
-    final songsList = mediaStore.sharedSongs.map((f) {
+    final songsList = mediaStore.meshSongs.map((f) {
       return {
         'id': f.id,
         'title': LocalMediaStore.cleanTitle(f.name),
@@ -203,7 +249,7 @@ class LocalMeshServer {
   }
 
   Future<void> _handleVideos(HttpRequest request) async {
-    final videosList = mediaStore.sharedVideos.map((f) {
+    final videosList = mediaStore.meshVideos.map((f) {
       return {
         'id': f.id,
         'title': LocalMediaStore.cleanTitle(f.name),
@@ -226,7 +272,7 @@ class LocalMeshServer {
   /// High-performance HTTP 206 Byte-Range streaming for smooth seeking in videos and audio
   Future<void> _handleStream(HttpRequest request, String id) async {
     final item = mediaStore.getFileById(id);
-    if (item == null) {
+    if (item == null || !item.sharedWithMesh) {
       request.response.statusCode = HttpStatus.notFound;
       request.response.write(json.encode({'error': 'Media not found'}));
       await request.response.close();
@@ -302,7 +348,7 @@ class LocalMeshServer {
   /// Download endpoint for 1-tap peer pinning
   Future<void> _handleDownload(HttpRequest request, String id) async {
     final item = mediaStore.getFileById(id);
-    if (item == null) {
+    if (item == null || !item.sharedWithMesh) {
       request.response.statusCode = HttpStatus.notFound;
       await request.response.close();
       return;

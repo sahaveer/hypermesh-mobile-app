@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 import '../models/peer_node.dart';
 import 'background_mesh_service.dart';
@@ -28,23 +29,53 @@ class UpdateInfo {
 }
 
 class AppUpdateService {
-  /// Checks for peer updates on local Wi-Fi / Hotspot (Option C - P2P Mesh Update)
-  static UpdateInfo? checkPeerUpdates(List<PeerNode> peers) {
-    PeerNode? bestPeer;
+  static const String peerUpdatesEnabledKey = 'allow_peer_app_updates';
 
+  /// Peer app updates are OFF by default: the UDP beacon's build_number
+  /// is attacker-controllable on any LAN, so auto-trusting the highest
+  /// build means auto-installing attacker-supplied APKs. A paired peer
+  /// can also lie. The user must opt in in Settings before this fires.
+  static Future<bool> peerUpdatesAllowed() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getBool(peerUpdatesEnabledKey) ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> setPeerUpdatesAllowed(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(peerUpdatesEnabledKey, value);
+  }
+
+  /// Checks for peer updates on local Wi-Fi / Hotspot (Option C - P2P Mesh Update).
+  /// Returns null unless the caller explicitly opts in via [allowPeerUpdates];
+  /// pair this with [peerUpdatesAllowed] on the call site.
+  static UpdateInfo? checkPeerUpdates(
+    List<PeerNode> peers, {
+    bool allowPeerUpdates = false,
+  }) {
+    if (!allowPeerUpdates) return null;
+
+    PeerNode? bestPeer;
     for (final peer in peers) {
-      if (peer.isOnline && peer.buildNumber > AppConfig.buildNumber) {
-        if (bestPeer == null || peer.buildNumber > bestPeer.buildNumber) {
-          bestPeer = peer;
-        }
+      // Only paired peers (ones whose mesh token we already hold) are eligible.
+      // An unpaired beacon on the LAN cannot push an install prompt.
+      if (!peer.isOnline) continue;
+      if (peer.meshToken == null || peer.meshToken!.isEmpty) continue;
+      if (peer.buildNumber <= AppConfig.buildNumber) continue;
+      if (bestPeer == null || peer.buildNumber > bestPeer.buildNumber) {
+        bestPeer = peer;
       }
     }
 
     if (bestPeer != null) {
+      final token = bestPeer.meshToken!;
       return UpdateInfo(
         version: bestPeer.appVersion,
         buildNumber: bestPeer.buildNumber,
-        apkUrl: "${bestPeer.baseUrl}/api/app/latest.apk",
+        apkUrl: "${bestPeer.baseUrl}/api/app/latest.apk?t=${Uri.encodeQueryComponent(token)}",
         releaseNotes: "New update available from ${bestPeer.name} over local Wi-Fi mesh.",
         isPeerUpdate: true,
         sourceName: bestPeer.name,
@@ -52,6 +83,63 @@ class AppUpdateService {
     }
 
     return null;
+  }
+
+  /// Checks the configured GitHub repo's /releases/latest for a newer APK build.
+  /// Tag is expected to look like "v1.0.3+4"; the +N suffix is treated as the
+  /// build number and compared against AppConfig.buildNumber.
+  static Future<UpdateInfo?> checkGithubRelease(String repo) async {
+    try {
+      final clean = repo.trim();
+      if (clean.isEmpty || !clean.contains('/')) return null;
+      final uri = Uri.parse("https://api.github.com/repos/$clean/releases/latest");
+      final response = await http
+          .get(uri, headers: {'Accept': 'application/vnd.github+json'})
+          .timeout(const Duration(seconds: 8));
+      if (response.statusCode != 200) return null;
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final tagName = data['tag_name']?.toString() ?? '';
+      final body = data['body']?.toString() ?? 'Latest release from GitHub.';
+      final (parsedVersion, parsedBuild) = _parseVersionTag(tagName);
+      if (parsedBuild <= AppConfig.buildNumber) return null;
+
+      final assets = (data['assets'] as List? ?? []);
+      String? apkUrl;
+      for (final asset in assets) {
+        final name = asset['name']?.toString() ?? '';
+        if (name.toLowerCase().endsWith('.apk')) {
+          apkUrl = asset['browser_download_url']?.toString();
+          break;
+        }
+      }
+      if (apkUrl == null || apkUrl.isEmpty) return null;
+
+      return UpdateInfo(
+        version: parsedVersion,
+        buildNumber: parsedBuild,
+        apkUrl: apkUrl,
+        releaseNotes: body,
+        isPeerUpdate: false,
+        sourceName: "GitHub",
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  static (String, int) _parseVersionTag(String tag) {
+    // Accepts "v1.0.3+4", "1.0.3+4", or plain "1.0.3". Missing build defaults to 0.
+    var text = tag.trim();
+    if (text.startsWith('v') || text.startsWith('V')) text = text.substring(1);
+    final plusIdx = text.indexOf('+');
+    if (plusIdx == -1) {
+      return (text.isEmpty ? '0.0.0' : text, 0);
+    }
+    final version = text.substring(0, plusIdx);
+    final buildStr = text.substring(plusIdx + 1);
+    final build = int.tryParse(buildStr) ?? 0;
+    return (version.isEmpty ? '0.0.0' : version, build);
   }
 
   /// Checks for remote server updates (Option B - Online OTA Update)

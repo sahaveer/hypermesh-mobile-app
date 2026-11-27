@@ -9,6 +9,7 @@ class PeerNode {
   final DateTime lastSeen;
   final String appVersion;
   final int buildNumber;
+  final String? meshToken;
 
   PeerNode({
     required this.id,
@@ -21,7 +22,22 @@ class PeerNode {
     DateTime? lastSeen,
     this.appVersion = "1.0.0",
     this.buildNumber = 1,
+    this.meshToken,
   }) : lastSeen = lastSeen ?? DateTime.now();
+
+  PeerNode withToken(String? token) => PeerNode(
+        id: id,
+        name: name,
+        host: host,
+        port: port,
+        musicCount: musicCount,
+        videoCount: videoCount,
+        isOnline: isOnline,
+        lastSeen: lastSeen,
+        appVersion: appVersion,
+        buildNumber: buildNumber,
+        meshToken: token,
+      );
 
   String get baseUrl {
     if (host.startsWith('http://') || host.startsWith('https://')) {
@@ -41,6 +57,7 @@ class PeerNode {
       isOnline: json['is_online'] ?? true,
       appVersion: json['app_version']?.toString() ?? '1.0.0',
       buildNumber: (json['build_number'] is num) ? (json['build_number'] as num).toInt() : 1,
+      meshToken: json['mesh_token']?.toString(),
     );
   }
 }

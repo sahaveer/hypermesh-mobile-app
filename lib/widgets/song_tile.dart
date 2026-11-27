@@ -72,16 +72,38 @@ class SongTile extends StatelessWidget {
                 ),
               const Divider(color: AppTheme.border),
 
-              // Option 1: If it's a locally shared file from this phone
-              if (hypermesh.isLocalSharedMedia(song.id))
+              // Mesh-share toggle and destructive actions (local files only)
+              if (hypermesh.isLocalSharedMedia(song.id)) ...[
+                ListTile(
+                  leading: Icon(
+                    hypermesh.isFileSharedWithMesh(song.id) ? Icons.cell_tower : Icons.wifi_off,
+                    color: AppTheme.cyanAccent,
+                  ),
+                  title: Text(
+                    hypermesh.isFileSharedWithMesh(song.id)
+                        ? "Stop Sharing with Mesh"
+                        : "Share with Mesh",
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: Text(
+                    hypermesh.isFileSharedWithMesh(song.id)
+                        ? "Peers will no longer see this song; it stays on your phone."
+                        : "Peers on your Wi-Fi will be able to stream this song.",
+                    style: const TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    await hypermesh.toggleFileSharedWithMesh(song.id);
+                  },
+                ),
                 ListTile(
                   leading: const Icon(Icons.remove_circle_outline, color: Colors.orangeAccent),
                   title: const Text(
-                    "Stop Sharing / Remove from My Phone",
+                    "Remove from Library (Keep File)",
                     style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.bold),
                   ),
                   subtitle: const Text(
-                    "Unshares this song from your phone (keeps original file on phone)",
+                    "Drops this entry from the app's library. The file on your phone is kept.",
                     style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
                   ),
                   onTap: () {
@@ -89,12 +111,56 @@ class SongTile extends StatelessWidget {
                     hypermesh.removeSharedFile(song.id);
                     ScaffoldMessenger.of(context).showSnackBar(
                       SnackBar(
-                        content: Text("Unshared '${song.title}' from your phone."),
+                        content: Text("Removed '${song.title}' from library."),
                         backgroundColor: Colors.orangeAccent,
                       ),
                     );
                   },
                 ),
+                ListTile(
+                  leading: const Icon(Icons.delete_outline, color: Colors.redAccent),
+                  title: const Text(
+                    "Delete File from Device",
+                    style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+                  ),
+                  subtitle: const Text(
+                    "Permanently deletes the audio file from your phone's storage. Cannot be undone.",
+                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 11),
+                  ),
+                  onTap: () async {
+                    Navigator.pop(sheetContext);
+                    final confirmed = await showDialog<bool>(
+                      context: context,
+                      builder: (dctx) => AlertDialog(
+                        backgroundColor: AppTheme.surface,
+                        title: const Text("Delete file?", style: TextStyle(color: Colors.white)),
+                        content: Text(
+                          "This will permanently delete '${song.title}' from your phone's storage. Cannot be undone.",
+                          style: const TextStyle(color: AppTheme.textSecondary),
+                        ),
+                        actions: [
+                          TextButton(onPressed: () => Navigator.pop(dctx, false), child: const Text("Cancel")),
+                          TextButton(
+                            onPressed: () => Navigator.pop(dctx, true),
+                            child: const Text("Delete", style: TextStyle(color: Colors.redAccent)),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed == true && context.mounted) {
+                      final ok = await hypermesh.deleteLocalFile(song.id);
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: Text(ok ? "Deleted '${song.title}' from device." : "Could not delete file."),
+                            backgroundColor: ok ? Colors.redAccent : Colors.orangeAccent,
+                          ),
+                        );
+                      }
+                    }
+                  },
+                ),
+              ],
 
               // Option 2: Remove from my list (hide unwanted peer or server files)
               if (!hypermesh.isLocalSharedMedia(song.id))

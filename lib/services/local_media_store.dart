@@ -18,6 +18,10 @@ class SharedMediaFile {
   final bool isVideo;
   final double duration; // In seconds
   final String resolution;
+  /// Whether this file is exposed to mesh peers. Files added by the user
+  /// explicitly (folder picker, file picker) default to true for backward
+  /// compatibility; device-scan auto-discovered files default to false.
+  bool sharedWithMesh;
 
   SharedMediaFile({
     required this.id,
@@ -27,6 +31,7 @@ class SharedMediaFile {
     required this.isVideo,
     this.duration = 0.0,
     this.resolution = "1080p FHD",
+    this.sharedWithMesh = true,
   });
 
   Map<String, dynamic> toJson() => {
@@ -37,6 +42,7 @@ class SharedMediaFile {
         'isVideo': isVideo,
         'duration': duration,
         'resolution': resolution,
+        'sharedWithMesh': sharedWithMesh,
       };
 
   factory SharedMediaFile.fromJson(Map<String, dynamic> json) => SharedMediaFile(
@@ -47,6 +53,8 @@ class SharedMediaFile {
         isVideo: json['isVideo'] ?? false,
         duration: (json['duration'] is num) ? (json['duration'] as num).toDouble() : 0.0,
         resolution: json['resolution'] ?? "1080p FHD",
+        // Default true keeps existing records sharing exactly as before upgrade.
+        sharedWithMesh: json['sharedWithMesh'] is bool ? json['sharedWithMesh'] : true,
       );
 }
 
@@ -79,8 +87,16 @@ class LocalMediaStore {
   final List<String> _sharedFolders = [];
 
   List<SharedMediaFile> get sharedFiles => List.unmodifiable(_sharedFiles);
+  // Every local audio/video the app knows about — visible to the user even
+  // if it's not currently shared with the mesh.
   List<SharedMediaFile> get sharedSongs => _sharedFiles.where((f) => !f.isVideo).toList();
   List<SharedMediaFile> get sharedVideos => _sharedFiles.where((f) => f.isVideo).toList();
+  // Only files the user has flagged as mesh-shared. This is what the local
+  // HTTP server exposes to peers.
+  List<SharedMediaFile> get meshSongs =>
+      _sharedFiles.where((f) => !f.isVideo && f.sharedWithMesh).toList();
+  List<SharedMediaFile> get meshVideos =>
+      _sharedFiles.where((f) => f.isVideo && f.sharedWithMesh).toList();
   List<String> get sharedFolders => List.unmodifiable(_sharedFolders);
 
   Future<void> init() async {
@@ -324,6 +340,136 @@ class LocalMediaStore {
   Future<void> removeFile(String id) async {
     _sharedFiles.removeWhere((f) => f.id == id);
     await save();
+  }
+
+  /// Toggles whether a locally-known file is served to mesh peers. The file
+  /// stays in the library and remains playable on this device.
+  Future<bool> setFileSharedWithMesh(String id, bool shared) async {
+    final idx = _sharedFiles.indexWhere((f) => f.id == id);
+    if (idx == -1) return false;
+    _sharedFiles[idx].sharedWithMesh = shared;
+    await save();
+    return true;
+  }
+
+  /// Permanently deletes a local file from device storage AND the library
+  /// index. Only touches files inside paths the app already tracks.
+  /// Returns true if the physical file was removed (or was already gone).
+  Future<bool> deleteLocalFile(String id) async {
+    final idx = _sharedFiles.indexWhere((f) => f.id == id);
+    if (idx == -1) return false;
+    final item = _sharedFiles[idx];
+    bool deleted = true;
+    try {
+      final file = File(item.path);
+      if (await file.exists()) {
+        await file.delete();
+      }
+    } catch (e) {
+      debugPrint("Error deleting local file ${item.path}: $e");
+      deleted = false;
+    }
+    _sharedFiles.removeAt(idx);
+    await save();
+    return deleted;
+  }
+
+  /// Well-known top-level public media locations on Android. The user can
+  /// still add arbitrary folders with the picker; this just surfaces what
+  /// most phones already have without asking for MANAGE_EXTERNAL_STORAGE.
+  static const List<String> _androidPublicMediaDirs = [
+    '/storage/emulated/0/Music',
+    '/storage/emulated/0/Movies',
+    '/storage/emulated/0/Podcasts',
+    '/storage/emulated/0/Audiobooks',
+    '/storage/emulated/0/Download',
+    '/storage/emulated/0/Downloads',
+    '/storage/emulated/0/DCIM',
+    '/storage/emulated/0/Ringtones',
+    '/storage/emulated/0/Recordings',
+    '/storage/emulated/0/WhatsApp/Media/WhatsApp Audio',
+    '/storage/emulated/0/WhatsApp/Media/WhatsApp Video',
+    '/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Audio',
+    '/storage/emulated/0/Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Video',
+    '/storage/emulated/0/Telegram/Telegram Audio',
+    '/storage/emulated/0/Telegram/Telegram Video',
+  ];
+
+  /// Scans the device's well-known public media directories (Music, Movies,
+  /// Downloads, DCIM, …) and adds every audio/video file not already tracked.
+  /// New entries default to [SharedMediaFile.sharedWithMesh] = false so the
+  /// user's personal library isn't auto-exposed to peers.
+  Future<({int added, bool permissionGranted, String? error})> scanDeviceMedia() async {
+    try {
+      final granted = await _ensureStoragePermissions();
+      if (!granted) {
+        return (added: 0, permissionGranted: false, error: "Media permission denied.");
+      }
+      if (!Platform.isAndroid) {
+        return (added: 0, permissionGranted: true, error: "Device scan is Android-only right now.");
+      }
+
+      final existingPaths = _sharedFiles.map((f) => f.path).toSet();
+      final addedItems = <SharedMediaFile>[];
+
+      for (final dirPath in _androidPublicMediaDirs) {
+        final dir = Directory(dirPath);
+        if (!await dir.exists()) continue;
+        final queue = <Directory>[dir];
+        while (queue.isNotEmpty) {
+          final current = queue.removeLast();
+          List<FileSystemEntity> entries;
+          try {
+            entries = current.listSync(followLinks: false);
+          } catch (_) {
+            continue;
+          }
+          for (final entity in entries) {
+            if (entity is Directory) {
+              final base = _basename(entity.path);
+              if (!base.startsWith('.')) queue.add(entity);
+              continue;
+            }
+            if (entity is! File) continue;
+            final filePath = entity.path;
+            if (existingPaths.contains(filePath)) continue;
+            final ext = _extension(filePath);
+            final isAudio = audioExtensions.contains(ext);
+            final isVideo = videoExtensions.contains(ext);
+            if (!isAudio && !isVideo) continue;
+
+            int fileSize = 0;
+            try {
+              fileSize = entity.lengthSync();
+            } catch (_) {}
+
+            final fileName = _basename(filePath);
+            final id = "device_${DateTime.now().microsecondsSinceEpoch}_${addedItems.length}";
+            final item = SharedMediaFile(
+              id: id,
+              path: filePath,
+              name: fileName,
+              size: fileSize,
+              isVideo: isVideo,
+              duration: _estimateDuration(fileSize, isVideo: isVideo),
+              resolution: isVideo ? _guessResolution(fileName) : "",
+              sharedWithMesh: false,
+            );
+            _sharedFiles.insert(0, item);
+            existingPaths.add(filePath);
+            addedItems.add(item);
+          }
+        }
+      }
+
+      if (addedItems.isNotEmpty) {
+        await save();
+      }
+      return (added: addedItems.length, permissionGranted: true, error: null);
+    } catch (e) {
+      debugPrint("Error during device scan: $e");
+      return (added: 0, permissionGranted: true, error: "Scan failed: $e");
+    }
   }
 
   SharedMediaFile? getFileById(String id) {
