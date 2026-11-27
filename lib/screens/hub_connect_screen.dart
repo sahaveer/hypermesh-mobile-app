@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
@@ -9,6 +11,7 @@ import '../widgets/server_downloader_dialog.dart';
 import '../theme/app_theme.dart';
 import '../config/app_config.dart';
 import '../widgets/app_update_dialog.dart';
+import '../widgets/privacy_policy_dialog.dart';
 import 'login_screen.dart';
 
 class HubConnectScreen extends StatefulWidget {
@@ -391,7 +394,7 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
               _buildGuideStep(
                 step: "2",
                 title: "Connect Local Music & Videos",
-                desc: "Open http://localhost:8000 on your server, go to Privacy & Folders, and add your local Music/Video folders so everything stays offline on your network.",
+                desc: "Open your server's local dashboard (port 8000) in a browser, go to Privacy & Folders, and add your local Music/Video folders so everything stays offline on your network.",
               ),
               const SizedBox(height: 12),
               _buildGuideStep(
@@ -827,26 +830,32 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
             ),
           ),
           const SizedBox(height: 12),
-          _PresetTile(
-            title: "Localhost (PC / Desktop)",
-            subtitle: "http://localhost:8000",
-            icon: Icons.computer,
-            onTap: () {
-              _hostController.text = "http://localhost:8000";
-              _applyAndTestHost("http://localhost:8000");
-            },
-          ),
-          const SizedBox(height: 8),
-          _PresetTile(
-            title: "Android Emulator Gateway",
-            subtitle: "http://10.0.2.2:8000",
-            icon: Icons.phone_android,
-            onTap: () {
-              _hostController.text = "http://10.0.2.2:8000";
-              _applyAndTestHost("http://10.0.2.2:8000");
-            },
-          ),
-          const SizedBox(height: 8),
+          if (kDebugMode ||
+              (!kIsWeb && (Platform.isWindows || Platform.isLinux || Platform.isMacOS))) ...[
+            _PresetTile(
+              title: "Local PC / Desktop Hub",
+              subtitle: "http://${InternetAddress.loopbackIPv4.address}:8000",
+              icon: Icons.computer,
+              onTap: () {
+                final url = "http://${InternetAddress.loopbackIPv4.address}:8000";
+                _hostController.text = url;
+                _applyAndTestHost(url);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+          if (kDebugMode) ...[
+            _PresetTile(
+              title: "Android Emulator Gateway",
+              subtitle: "http://10.0.2.2:8000",
+              icon: Icons.phone_android,
+              onTap: () {
+                _hostController.text = "http://10.0.2.2:8000";
+                _applyAndTestHost("http://10.0.2.2:8000");
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
           _PresetTile(
             title: "Instant Demo Mesh (Offline)",
             subtitle: "Loads demo hypermesh without server",
@@ -1041,6 +1050,13 @@ class _HubConnectScreenState extends State<HubConnectScreen> {
           ),
           const SizedBox(height: 12),
           _buildShareAppCard(context),
+          const SizedBox(height: 12),
+          _PresetTile(
+            title: "Privacy Policy",
+            subtitle: "Review how local media, OTP sign-in & permissions work",
+            icon: Icons.privacy_tip_outlined,
+            onTap: () => showPrivacyPolicyDialog(context),
+          ),
           const SizedBox(height: 24),
           const Text(
             "COMMUNITY EXTENSIONS & GITHUB PATCHES",

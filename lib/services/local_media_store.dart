@@ -376,7 +376,7 @@ class LocalMediaStore {
 
   /// Well-known top-level public media locations on Android. The user can
   /// still add arbitrary folders with the picker; this just surfaces what
-  /// most phones already have without asking for MANAGE_EXTERNAL_STORAGE.
+  /// most phones already have without requesting broad all-files storage access.
   static const List<String> _androidPublicMediaDirs = [
     '/storage/emulated/0/Music',
     '/storage/emulated/0/Movies',

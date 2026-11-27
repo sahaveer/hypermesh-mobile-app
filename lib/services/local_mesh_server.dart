@@ -16,7 +16,7 @@ class LocalMeshServer {
 
   HttpServer? _server;
   int _port = 8080;
-  String _localIp = "127.0.0.1";
+  String _localIp = InternetAddress.loopbackIPv4.address;
   bool _isRunning = false;
   String _meshToken;
 
@@ -426,6 +426,6 @@ class LocalMeshServer {
       }
     } catch (_) {}
 
-    return "127.0.0.1";
+    return InternetAddress.loopbackIPv4.address;
   }
 }

@@ -106,7 +106,7 @@ class MeshForegroundService : Service() {
             .setContentTitle("Hypermesh Active")
             .setContentText(statusText)
             .setSubText("Offline Wi-Fi Node")
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_stat_hypermesh)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setContentIntent(contentIntent)

@@ -92,7 +92,7 @@ class HypermeshProvider extends ChangeNotifier {
 
   String get deviceId => _deviceId;
   String get deviceName => _deviceName;
-  String get localNodeIp => _localMeshServer?.localIp ?? "127.0.0.1";
+  String get localNodeIp => _localMeshServer?.localIp ?? InternetAddress.loopbackIPv4.address;
   int get localNodePort => _localMeshServer?.port ?? 8080;
   bool get isServerRunning => _localMeshServer?.isRunning ?? false;
   int get sharedFilesCount => localMediaStore.sharedFiles.length;

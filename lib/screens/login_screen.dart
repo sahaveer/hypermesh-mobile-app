@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
 import '../theme/app_theme.dart';
+import '../widgets/privacy_policy_dialog.dart';
 import 'home_screen.dart';
 
 class LoginScreen extends StatefulWidget {
@@ -223,7 +224,7 @@ class _LoginScreenState extends State<LoginScreen> {
                           decoration: InputDecoration(
                             filled: true,
                             fillColor: AppTheme.surfaceLight,
-                            hintText: "name@example.com",
+                            hintText: "you@yourmail.com",
                             hintStyle: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
                             prefixIcon: const Icon(Icons.email_outlined, color: AppTheme.cyanAccent, size: 20),
                             border: OutlineInputBorder(
@@ -408,6 +409,18 @@ class _LoginScreenState extends State<LoginScreen> {
                       color: AppTheme.textSecondary,
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                TextButton(
+                  onPressed: () => showPrivacyPolicyDialog(context),
+                  child: const Text(
+                    "Privacy Policy",
+                    style: TextStyle(
+                      color: AppTheme.cyanAccent,
+                      fontSize: 12,
+                      decoration: TextDecoration.underline,
                     ),
                   ),
                 ),
