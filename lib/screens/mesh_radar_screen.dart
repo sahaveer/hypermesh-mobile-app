@@ -13,6 +13,10 @@ class MeshRadarScreen extends StatelessWidget {
 
   void _showMyQrSheet(BuildContext context, HypermeshProvider hypermesh) {
     final shareUrl = hypermesh.localShareUrl;
+    // QR carries the paired shared secret (host+port+token) so the scanning
+    // device can authenticate to this device's mesh server. The visible URL
+    // below is just a human-readable address — the token stays in the QR.
+    final qrPayload = hypermesh.localPairingPayload;
     showModalBottomSheet(
       context: context,
       backgroundColor: AppTheme.surface,
@@ -52,7 +56,7 @@ class MeshRadarScreen extends StatelessWidget {
                   borderRadius: BorderRadius.circular(18),
                 ),
                 child: QrImageView(
-                  data: shareUrl,
+                  data: qrPayload,
                   version: QrVersions.auto,
                   size: 200,
                   backgroundColor: Colors.white,
